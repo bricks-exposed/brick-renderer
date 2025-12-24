@@ -6,13 +6,7 @@
   "author": "Justin Renjilian",
   "type": "module",
   "main": "index.js",
-  "scripts": {
-    "start": "vite",
-    "test": "vitest"
-  },
   "devDependencies": {
-    "@webgpu/types": "^0.1.68",
-    "vite": "^7.3.0",
-    "vitest": "^4.0.16"
+    "@webgpu/types": "^0.1.68"
   }
 }

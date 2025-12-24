@@ -1,0 +1,327 @@
+import { getCommandVertices, LineType, processFile } from "./ldraw.js";
+import * as matrix from "./matrix.js";
+
+export class Renderer {
+  /** @readonly */ #device;
+
+  /** @readonly */ #context;
+
+  /** @readonly @type {RenderDescriptor} */ #egdeRender;
+
+  /** @readonly @type {RenderDescriptor} */ #quadRender;
+
+  /** @readonly */ #uniformBuffer;
+
+  /** @readonly */ #bindGroup;
+
+  /** @readonly @type {GPUVertexBufferLayout} */
+  static #bufferLayout = {
+    arrayStride: 3 * 4,
+    attributes: [
+      {
+        format: "float32x3",
+        offset: 0,
+        shaderLocation: 0,
+      },
+    ],
+  };
+
+  /** @readonly @type {GPUDepthStencilState} */
+  static #depthStencil = {
+    depthWriteEnabled: true,
+    depthCompare: "greater",
+    format: "depth24plus",
+  };
+
+  /**
+   * @param {HTMLCanvasElement} canvas
+   * @param {string} file
+   */
+  static async for(canvas, file) {
+    const context = canvas.getContext("webgpu");
+    if (!context) {
+      throw new Error("Could not get canvas webgpu context");
+    }
+
+    const adapter = await navigator.gpu.requestAdapter();
+    if (!adapter) {
+      throw new Error("No appropriate GPUAdapter found.");
+    }
+
+    const device = await adapter.requestDevice();
+
+    const format = navigator.gpu.getPreferredCanvasFormat();
+
+    context.configure({ device, format });
+
+    return new Renderer(device, format, context, file);
+  }
+
+  /**
+   * @param {GPUDevice} device
+   * @param {GPUTextureFormat} format
+   * @param {GPUCanvasContext} context
+   * @param {string} file
+   */
+  constructor(device, format, context, file) {
+    this.#device = device;
+    this.#context = context;
+
+    this.#uniformBuffer = device.createBuffer({
+      label: "Rotation matrix",
+      size: 16 * 4,
+      usage: GPUBufferUsage.COPY_DST | GPUBufferUsage.UNIFORM,
+    });
+
+    const bindGroupLayout = device.createBindGroupLayout({
+      label: "Rotation uniform bind group layout",
+      entries: [
+        {
+          binding: 0,
+          visibility:
+            GPUShaderStage.VERTEX |
+            GPUShaderStage.FRAGMENT |
+            GPUShaderStage.COMPUTE,
+          buffer: { type: "uniform" },
+        },
+      ],
+    });
+
+    this.#bindGroup = device.createBindGroup({
+      label: "Rotation uniform group",
+      layout: bindGroupLayout,
+      entries: [
+        {
+          binding: 0,
+          resource: { buffer: this.#uniformBuffer },
+        },
+      ],
+    });
+
+    const pipelineLayout = device.createPipelineLayout({
+      label: "Rotation uniform pipeline layout",
+      bindGroupLayouts: [bindGroupLayout],
+    });
+
+    const edgeShaderModule = device.createShaderModule({
+      label: "Edge shader",
+      code: EDGE_SHADER,
+    });
+
+    const edgePipeline = device.createRenderPipeline({
+      label: "Edge pipeline",
+      layout: pipelineLayout,
+      primitive: { topology: "line-list" },
+      depthStencil: Renderer.#depthStencil,
+      vertex: {
+        module: edgeShaderModule,
+        entryPoint: "vertexMain",
+        buffers: [Renderer.#bufferLayout],
+      },
+      fragment: {
+        module: edgeShaderModule,
+        entryPoint: "fragmentMain",
+        targets: [{ format }],
+      },
+    });
+
+    const quadShaderModule = device.createShaderModule({
+      label: "Quad shader",
+      code: QUAD_SHADER,
+    });
+
+    const quadPipeline = device.createRenderPipeline({
+      label: "Quad pipeline",
+      layout: pipelineLayout,
+      primitive: { cullMode: "back" },
+      depthStencil: Renderer.#depthStencil,
+      vertex: {
+        module: quadShaderModule,
+        entryPoint: "vertexMain",
+        buffers: [Renderer.#bufferLayout],
+      },
+      fragment: {
+        module: quadShaderModule,
+        entryPoint: "fragmentMain",
+        targets: [{ format }],
+      },
+    });
+
+    const commands = processFile(file);
+    this.#egdeRender = {
+      ...this.#getRenderDescriptor(commands, LineType.DrawLine),
+      pipeline: edgePipeline,
+    };
+    this.#quadRender = {
+      ...this.#getRenderDescriptor(commands, [
+        LineType.DrawTriangle,
+        LineType.DrawQuadrilateral,
+      ]),
+      pipeline: quadPipeline,
+    };
+  }
+
+  /**
+   * @param {Transform} transform
+   */
+  render(transform) {
+    const transformMatrix = Renderer.#transformMatrix(transform);
+    this.#device.queue.writeBuffer(this.#uniformBuffer, 0, transformMatrix);
+
+    const encoder = this.#device.createCommandEncoder();
+
+    const canvasTexture = this.#context.getCurrentTexture();
+    const canvasTextureView = canvasTexture.createView();
+    const depthTexture = this.#device.createTexture({
+      size: [canvasTexture.width, canvasTexture.height],
+      format: Renderer.#depthStencil.format,
+      usage: GPUTextureUsage.RENDER_ATTACHMENT,
+    });
+
+    const pass = encoder.beginRenderPass({
+      label: "Draw it all",
+      colorAttachments: [
+        {
+          view: canvasTextureView,
+          loadOp: "clear",
+          storeOp: "store",
+          clearValue: { r: 0.217, g: 0.427, b: 0.878, a: 1 },
+        },
+      ],
+      depthStencilAttachment: {
+        view: depthTexture,
+        depthClearValue: 0,
+        depthLoadOp: "clear",
+        depthStoreOp: "store",
+      },
+    });
+
+    pass.setBindGroup(0, this.#bindGroup);
+
+    Renderer.#renderThing(this.#egdeRender, pass);
+    Renderer.#renderThing(this.#quadRender, pass);
+
+    pass.end();
+
+    this.#device.queue.submit([encoder.finish()]);
+  }
+
+  /**
+   *
+   * @param {RenderDescriptor} render
+   * @param {GPURenderPassEncoder} pass
+   */
+  static #renderThing(render, pass) {
+    if (!render.count) {
+      return;
+    }
+
+    pass.setPipeline(render.pipeline);
+    pass.setVertexBuffer(0, render.vertexBuffer);
+    pass.draw(render.count);
+  }
+
+  /**
+   * @param {Transform} transform
+   *
+   * @returns {Float32Array<ArrayBuffer>}
+   */
+  static #transformMatrix(transform) {
+    return new Float32Array(
+      matrix.transform(
+        [
+          matrix.orthographic(-1, 1, -1, 1, -10, 10),
+          matrix.fromRotationX(transform.rotateX),
+          matrix.fromRotationY(transform.rotateY),
+          matrix.fromRotationZ(transform.rotateZ),
+          matrix.fromScaling(transform.scale),
+        ],
+        matrix.identity
+      )
+    );
+  }
+
+  /**
+   * @param {import("./ldraw.js").Command[]} commands
+   * @param {number | readonly number[]} lineTypes
+   */
+  #getRenderDescriptor(commands, lineTypes) {
+    const vertices = getCommandVertices(commands, lineTypes);
+
+    const vertexBuffer = this.#device.createBuffer({
+      size: vertices.byteLength,
+      usage: GPUBufferUsage.COPY_DST | GPUBufferUsage.VERTEX,
+    });
+    this.#device.queue.writeBuffer(vertexBuffer, 0, vertices);
+
+    return {
+      count: vertices.length / 3,
+      vertexBuffer,
+    };
+  }
+}
+
+/**
+ * @typedef {{
+ *   rotateX: number;
+ *   rotateY: number;
+ *   rotateZ: number;
+ *   scale: number;
+ * }} Transform
+ */
+
+/**
+ * @typedef {{
+ *   count: number;
+ *   vertexBuffer: GPUBuffer;
+ *   pipeline: GPURenderPipeline;
+ * }} RenderDescriptor
+ */
+
+const EDGE_SHADER = `
+  struct VertexInput {
+    @location(0) position: vec4f,
+  }
+
+  struct VertexOutput {
+    @builtin(position) position: vec4f,
+  }
+
+  @group(0) @binding(0) var<uniform> rotationMatrix: mat4x4f;
+
+  @vertex
+  fn vertexMain(input: VertexInput) -> VertexOutput {
+    var output: VertexOutput;
+    output.position = rotationMatrix * input.position;
+    return output;
+  }
+
+  @fragment
+  fn fragmentMain() -> @location(0) vec4f {
+    return vec4(1.0, 1.0, 1.0, 1.0);
+  }
+  `;
+
+const QUAD_SHADER = `
+  struct VertexInput {
+    @location(0) position: vec4f,
+  }
+
+  struct VertexOutput {
+    @builtin(position) position: vec4f,
+  }
+
+  @group(0) @binding(0) var<uniform> rotationMatrix: mat4x4f;
+
+  @vertex
+  fn vertexMain(input: VertexInput) -> VertexOutput {
+    var output: VertexOutput;
+    output.position = rotationMatrix * input.position;
+    return output;
+  }
+
+  @fragment
+  fn fragmentMain() -> @location(0) vec4f {
+    return vec4(0.0, 1.0, 0.0, 1.0);
+  }
+  `;

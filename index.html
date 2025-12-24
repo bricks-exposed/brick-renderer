@@ -55,39 +55,13 @@
       <button type="reset">Reset</button>
     </form>
     <script type="module">
-      import { run } from "./index.js";
+      import { initialize } from "./index.js";
 
       const canvas = document.querySelector("canvas");
 
-      // Smoother lines on high resolution displays
-      const devicePixelRatio = window.devicePixelRatio;
-      canvas.width = canvas.clientWidth * devicePixelRatio;
-      canvas.height = canvas.clientHeight * devicePixelRatio;
-
       const form = document.querySelector("form");
 
-      let animationFrame = -1;
-
-      async function update() {
-        cancelAnimationFrame(animationFrame);
-
-        animationFrame = requestAnimationFrame(async function () {
-          const data = new FormData(form);
-
-          const transforms = {
-            rotateX: (data.get("rotateX") * Math.PI) / 180,
-            rotateY: (data.get("rotateY") * Math.PI) / 180,
-            rotateZ: (data.get("rotateZ") * Math.PI) / 180,
-            scale: Number.parseFloat(data.get("scale")),
-          };
-          await run(canvas, transforms);
-        });
-      }
-
-      form.addEventListener("input", update);
-      form.addEventListener("reset", update);
-
-      await update();
+      await initialize(canvas, form);
     </script>
   </body>
 </html>

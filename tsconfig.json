@@ -1,6 +1,6 @@
 {
   "compilerOptions": {
-    "types": ["@webgpu/types", "vitest/config", "vitest/importMeta"],
+    "types": ["@webgpu/types"],
     "strict": true,
     "noImplicitAny": true,
     "exactOptionalPropertyTypes": true,

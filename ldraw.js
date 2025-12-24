@@ -9,6 +9,25 @@ export const LineType = Object.freeze({
 });
 
 /**
+ * @param {Command[]} commands
+ * @param {number | readonly number[]} lineTypes
+ *
+ * @returns {Float32Array<ArrayBuffer>}
+ */
+export function getCommandVertices(commands, lineTypes) {
+  const typeSet = new Set(
+    typeof lineTypes === "number" ? [lineTypes] : lineTypes
+  );
+
+  const vertices = commands
+    .filter((c) => typeSet.has(c.type))
+    .flatMap(commandVertices)
+    .filter((v) => v != null);
+
+  return new Float32Array(vertices);
+}
+
+/**
  * @param {string} file
  *
  * @returns {Command[]}
@@ -18,14 +37,13 @@ export function processFile(file) {
     .split("\n")
     .map((line) => line.trim())
     .filter(Boolean)
-    .map(processCommand)
-    .filter((c) => c != null);
+    .map(processCommand);
 }
 
 /**
  * @param {string} command
  *
- * @returns {Command | undefined}
+ * @returns {Command}
  */
 function processCommand(command) {
   if (command.startsWith(LineType.DrawLine.toString())) {
@@ -40,12 +58,12 @@ function processCommand(command) {
     return processDrawQuadrilateral(command);
   }
 
-  return undefined;
+  return { type: LineType.Comment };
 }
 
 /**
  * @param {string} command
- * @returns {DrawLine | undefined}
+ * @returns {DrawLine}
  */
 function processDrawLine(command) {
   const [type, color, x1, y1, z1, x2, y2, z2] = command
@@ -78,7 +96,7 @@ function processDrawLine(command) {
 /**
  * @param {string} command
  *
- * @returns {DrawTriangle | undefined}
+ * @returns {DrawTriangle}
  */
 function processDrawTriangle(command) {
   const [type, color, x1, y1, z1, x2, y2, z2, x3, y3, z3] = command
@@ -114,7 +132,7 @@ function processDrawTriangle(command) {
 
 /**
  * @param {string} command
- * @returns {DrawQuadrilateral | undefined}
+ * @returns {DrawQuadrilateral}
  */
 function processDrawQuadrilateral(command) {
   const [type, color, x1, y1, z1, x2, y2, z2, x3, y3, z3, x4, y4, z4] = command
@@ -187,7 +205,12 @@ function quadrilateralToTwoTriangles([one, two, three, four]) {
 }
 
 /**
- * @typedef {DrawLine | DrawTriangle | DrawQuadrilateral | DrawOptionalLine} Command
+ * @typedef {Comment
+ *   | DrawLine
+ *   | DrawTriangle
+ *   | DrawQuadrilateral
+ *   | DrawOptionalLine
+ * } Command
  */
 
 /**
@@ -209,9 +232,15 @@ function coordinateToGpu([x, y, z]) {
 
 /**
  * @typedef {{
+ * type: typeof LineType.Comment
+ * }} Comment
+ */
+
+/**
+ * @typedef {{
  *   type: typeof LineType.DrawLine;
  *   color: number;
- *   points: [Coordinate, Coordinate];
+ *   points: readonly [Coordinate, Coordinate];
  * }} DrawLine
  */
 
@@ -219,7 +248,7 @@ function coordinateToGpu([x, y, z]) {
  * @typedef {{
  *   type: typeof LineType.DrawTriangle;
  *   color: number;
- *   points: [Coordinate, Coordinate, Coordinate];
+ *   points: readonly [Coordinate, Coordinate, Coordinate];
  * }} DrawTriangle
  */
 
@@ -227,7 +256,7 @@ function coordinateToGpu([x, y, z]) {
  * @typedef {{
  *   type: typeof LineType.DrawQuadrilateral;
  *   color: number;
- *   points: [Coordinate, Coordinate, Coordinate, Coordinate];
+ *   points: readonly [Coordinate, Coordinate, Coordinate, Coordinate];
  * }} DrawQuadrilateral
  */
 
@@ -235,7 +264,7 @@ function coordinateToGpu([x, y, z]) {
  * @typedef {{
  *   type: typeof LineType.DrawOptionalLine;
  *   color: number;
- *   points: [Coordinate, Coordinate]
- *   controlPoints: [Coordinate, Coordinate];
+ *   points: readonly [Coordinate, Coordinate]
+ *   controlPoints: readonly [Coordinate, Coordinate];
  * }} DrawOptionalLine
  */
