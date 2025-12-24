@@ -32,6 +32,10 @@ function processCommand(command) {
     return processDrawLine(command);
   }
 
+  if (command.startsWith(LineType.DrawTriangle.toString())) {
+    return processDrawTriangle(command);
+  }
+
   if (command.startsWith(LineType.DrawQuadrilateral.toString())) {
     return processDrawQuadrilateral(command);
   }
@@ -67,6 +71,43 @@ function processDrawLine(command) {
     points: [
       [x1, y1, z1],
       [x2, y2, z2],
+    ],
+  };
+}
+
+/**
+ * @param {string} command
+ *
+ * @returns {DrawTriangle | undefined}
+ */
+function processDrawTriangle(command) {
+  const [type, color, x1, y1, z1, x2, y2, z2, x3, y3, z3] = command
+    .split(/\s/)
+    .map((s) => Number.parseFloat(s));
+
+  if (
+    type !== LineType.DrawTriangle ||
+    color === undefined ||
+    x1 === undefined ||
+    y1 === undefined ||
+    z1 === undefined ||
+    x2 === undefined ||
+    y2 === undefined ||
+    z2 === undefined ||
+    x3 === undefined ||
+    y3 === undefined ||
+    z3 === undefined
+  ) {
+    throw new Error(`Malformed line type 2 (draw line) command: ${command}`);
+  }
+
+  return {
+    type,
+    color,
+    points: [
+      [x1, y1, z1],
+      [x2, y2, z2],
+      [x3, y3, z3],
     ],
   };
 }
@@ -121,6 +162,7 @@ function processDrawQuadrilateral(command) {
 export function commandVertices(command) {
   switch (command.type) {
     case LineType.DrawLine:
+    case LineType.DrawTriangle:
       return command.points.flatMap(coordinateToGpu);
     case LineType.DrawQuadrilateral:
       return quadrilateralToTwoTriangles(command.points).flatMap(
