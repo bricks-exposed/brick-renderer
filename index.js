@@ -1,6 +1,7 @@
 import { Device } from "./device.js";
 import { initialize } from "./initialize.js";
-import { LineType, processFile } from "./src/ldraw.js";
+import { LineType, processFile, commandVertices } from "./ldraw.js";
+import * as matrix from "./matrix.js";
 
 const stud = `
   0 Circle 1.0
@@ -25,23 +26,124 @@ const stud = `
   0 // Build by Primitive Generator 2
   `;
 
+const box4t = `
+  0 Box with 4 Adjacent Faces and All Edges
+  0 Name: box4t.dat
+  0 Author: Tore Eriksson [Tore_Eriksson]
+  0 !LDRAW_ORG Primitive UPDATE 2003-02
+  0 !LICENSE Licensed under CC BY 4.0 : see CAreadme.txt
+
+  0 BFC CERTIFY CCW
+
+  0 !HISTORY 1997-09-29 [PTadmin] Official Update 1997-15
+  0 !HISTORY 2002-08-31 [izanette] Modified with WINDZ for BFC compliance
+  0 !HISTORY 2003-08-01 [PTadmin] Official Update 2003-02
+  0 !HISTORY 2007-06-24 [PTadmin] Header formatted for Contributor Agreement
+  0 !HISTORY 2008-07-01 [PTadmin] Official Update 2008-01
+
+
+  2 24 1 1 1 -1 1 1
+  2 24 -1 1 1 -1 1 -1
+  2 24 -1 1 -1 1 1 -1
+  2 24 1 1 -1 1 1 1
+  2 24 1 0 1 -1 0 1
+  2 24 -1 0 1 -1 0 -1
+  2 24 -1 0 -1 1 0 -1
+  2 24 1 0 -1 1 0 1
+  2 24 1 0 1 1 1 1
+  2 24 -1 0 1 -1 1 1
+  2 24 1 0 -1 1 1 -1
+  2 24 -1 0 -1 -1 1 -1
+  4 16 1 1 1 1 1 -1 -1 1 -1 -1 1 1
+  4 16 1 1 1 -1 1 1 -1 0 1 1 0 1
+  4 16 -1 1 1 -1 1 -1 -1 0 -1 -1 0 1
+  0 // 4 16 -1 1 -1 -1 0 -1 1 0 -1 1 1 -1
+  4 16 1 1 -1 1 1 1 1 0 1 1 0 -1
+  0
+  `;
+
 /**
  * @param {HTMLCanvasElement} canvas
+ * @param {{ rotateX: number, rotateY: number, rotateZ: number, scale: number }} transforms
  */
-export async function run(canvas) {
-  const file = stud;
+export async function run(canvas, transforms) {
+  const file = box4t;
 
-  const { device: gpuDevice, textureView, format } = await initialize(canvas);
+  const { device: gpuDevice, format, canvasTexture } = await initialize(canvas);
+
+  const canvasTextureView = canvasTexture.createView();
+
+  const depthTexture = gpuDevice.createTexture({
+    size: [canvasTexture.width, canvasTexture.height],
+    format: "depth24plus",
+    usage: GPUTextureUsage.RENDER_ATTACHMENT,
+  });
+
+  /** @type {GPUDepthStencilState} */
+  const depthStencil = {
+    depthWriteEnabled: true,
+    depthCompare: "greater",
+    format: "depth24plus",
+  };
 
   const device = new Device(gpuDevice);
 
   const commands = processFile(file);
 
-  const lineCommands = commands.filter((c) => c.type === LineType.DrawLine);
-
-  const edgeVertices = new Float32Array(
-    lineCommands.flatMap((c) => c.points.flatMap(([x, y, z]) => [x, z, -y]))
+  const rotateMatrix = new Float32Array(
+    matrix.transform(
+      [
+        matrix.orthographic(-1, 1, -1, 1, -10, 10),
+        matrix.fromRotationX(transforms.rotateX),
+        matrix.fromRotationY(transforms.rotateY),
+        matrix.fromRotationZ(transforms.rotateZ),
+        matrix.fromScaling(transforms.scale),
+      ],
+      matrix.identity
+    )
   );
+
+  const uniformBuffer = device.uniformBufferWith(
+    "Rotation matrix",
+    rotateMatrix
+  );
+
+  const bindGroupLayout = gpuDevice.createBindGroupLayout({
+    label: "Rotation uniform bind group layout",
+    entries: [
+      {
+        binding: 0,
+        visibility:
+          GPUShaderStage.VERTEX |
+          GPUShaderStage.FRAGMENT |
+          GPUShaderStage.COMPUTE,
+        buffer: { type: "uniform" },
+      },
+    ],
+  });
+
+  const pipelineLayout = gpuDevice.createPipelineLayout({
+    label: "Rotation uniform pipeline layout",
+    bindGroupLayouts: [bindGroupLayout],
+  });
+
+  const bindGroup = gpuDevice.createBindGroup({
+    label: "Rotation uniform group",
+    layout: bindGroupLayout,
+    entries: [
+      {
+        binding: 0,
+        resource: { buffer: uniformBuffer },
+      },
+    ],
+  });
+
+  const lineCommands = commands
+    .filter((c) => c.type === LineType.DrawLine)
+    .flatMap(commandVertices)
+    .filter((v) => v != null);
+
+  const edgeVertices = new Float32Array(lineCommands);
   const edgeVertexBuffer = device.vertexBufferWith(
     "Edge vertices",
     edgeVertices
@@ -63,17 +165,19 @@ export async function run(canvas) {
     label: "Edge shader",
     code: `
   struct VertexInput {
-    @location(0) position: vec3f,
+    @location(0) position: vec4f,
   }
 
   struct VertexOutput {
-    @builtin(position) pos: vec4f,
+    @builtin(position) position: vec4f,
   }
+
+  @group(0) @binding(0) var<uniform> rotationMatrix: mat4x4f;
 
   @vertex
   fn vertexMain(input: VertexInput) -> VertexOutput {
     var output: VertexOutput;
-    output.pos = vec4f(input.position, 1);
+    output.position = rotationMatrix * input.position;
     return output;
   }
 
@@ -86,8 +190,9 @@ export async function run(canvas) {
 
   const edgePipeline = gpuDevice.createRenderPipeline({
     label: "Edge pipeline",
-    layout: "auto",
+    layout: pipelineLayout,
     primitive: { topology: "line-list" },
+    depthStencil,
     vertex: {
       module: edgeShaderModule,
       entryPoint: "vertexMain",
@@ -100,6 +205,72 @@ export async function run(canvas) {
     },
   });
 
+  const quadCommands = commands
+    .filter((c) => c.type === LineType.DrawQuadrilateral)
+    .flatMap(commandVertices)
+    .filter((v) => v != null);
+  const quadVertices = new Float32Array(quadCommands);
+  const quadVertexBuffer = device.vertexBufferWith(
+    "Quad vertices",
+    quadVertices
+  );
+
+  /** @type {GPUVertexBufferLayout} */
+  const quadVertexBufferLayout = {
+    arrayStride: 12,
+    attributes: [
+      {
+        format: "float32x3",
+        offset: 0,
+        shaderLocation: 0,
+      },
+    ],
+  };
+
+  const quadShaderModule = gpuDevice.createShaderModule({
+    label: "Quad shader",
+    code: `
+  struct VertexInput {
+    @location(0) position: vec4f,
+  }
+
+  struct VertexOutput {
+    @builtin(position) position: vec4f,
+  }
+
+  @group(0) @binding(0) var<uniform> rotationMatrix: mat4x4f;
+
+  @vertex
+  fn vertexMain(input: VertexInput) -> VertexOutput {
+    var output: VertexOutput;
+    output.position = rotationMatrix * input.position;
+    return output;
+  }
+
+  @fragment
+  fn fragmentMain() -> @location(0) vec4f {
+    return vec4(0.0, 1.0, 0.0, 1.0);
+  }
+  `,
+  });
+
+  const quadPipeline = gpuDevice.createRenderPipeline({
+    label: "Quad pipeline",
+    layout: pipelineLayout,
+    primitive: { cullMode: "back" },
+    depthStencil,
+    vertex: {
+      module: quadShaderModule,
+      entryPoint: "vertexMain",
+      buffers: [quadVertexBufferLayout],
+    },
+    fragment: {
+      module: quadShaderModule,
+      entryPoint: "fragmentMain",
+      targets: [{ format }],
+    },
+  });
+
   function draw() {
     const encoder = gpuDevice.createCommandEncoder();
 
@@ -107,18 +278,32 @@ export async function run(canvas) {
       label: "Draw it all",
       colorAttachments: [
         {
-          view: textureView,
+          view: canvasTextureView,
           loadOp: "clear",
           storeOp: "store",
           clearValue: { r: 0.217, g: 0.427, b: 0.878, a: 1 },
         },
       ],
+      depthStencilAttachment: {
+        view: depthTexture,
+        depthClearValue: 0,
+        depthLoadOp: "clear",
+        depthStoreOp: "store",
+      },
     });
+
+    pass.setBindGroup(0, bindGroup);
 
     if (edgeVertices.length >= 3) {
       pass.setPipeline(edgePipeline);
       pass.setVertexBuffer(0, edgeVertexBuffer);
       pass.draw(edgeVertices.length / 3);
+    }
+
+    if (quadVertices.length >= 3) {
+      pass.setPipeline(quadPipeline);
+      pass.setVertexBuffer(0, quadVertexBuffer);
+      pass.draw(quadVertices.length / 3);
     }
 
     pass.end();

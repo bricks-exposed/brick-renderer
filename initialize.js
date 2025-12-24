@@ -18,7 +18,5 @@ export async function initialize(canvas) {
 
   context.configure({ device, format });
 
-  const textureView = context.getCurrentTexture().createView();
-
-  return { device, format, textureView };
+  return { device, format, canvasTexture: context.getCurrentTexture() };
 }
