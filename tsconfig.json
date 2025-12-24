@@ -1,0 +1,14 @@
+{
+  "compilerOptions": {
+    "types": ["@webgpu/types", "vitest/config", "vitest/importMeta"],
+    "strict": true,
+    "noImplicitAny": true,
+    "exactOptionalPropertyTypes": true,
+    "noUncheckedIndexedAccess": true,
+    "checkJs": true,
+    "target": "es2024",
+    "module": "nodenext",
+    "moduleResolution": "nodenext",
+    "noEmit": true
+  }
+}

@@ -1,0 +1,28 @@
+<!DOCTYPE html>
+<html>
+  <head>
+    <meta charset="utf-8" />
+    <title>WebGPU Brick Renderer</title>
+    <style>
+      canvas {
+        width: 512px;
+        height: 512px;
+      }
+    </style>
+  </head>
+  <body>
+    <canvas width="512" height="512"></canvas>
+    <script type="module">
+      import { run } from "./index.js";
+
+      const canvas = document.querySelector("canvas");
+
+      // Smoother lines on high resolution displays
+      const devicePixelRatio = window.devicePixelRatio;
+      canvas.width = canvas.clientWidth * devicePixelRatio;
+      canvas.height = canvas.clientHeight * devicePixelRatio;
+
+      await run(canvas);
+    </script>
+  </body>
+</html>
