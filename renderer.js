@@ -23,7 +23,7 @@ export class Renderer {
 
   /**
    * @param {HTMLCanvasElement} canvas
-   * @param {string} file
+   * @param {File} file
    */
   static async for(canvas, file) {
     const context = canvas.getContext("webgpu");
@@ -49,9 +49,9 @@ export class Renderer {
    * @param {GPUDevice} device
    * @param {GPUTextureFormat} format
    * @param {GPUCanvasContext} context
-   * @param {string} fileContents
+   * @param {File} file
    */
-  constructor(device, format, context, fileContents) {
+  constructor(device, format, context, file) {
     this.device = device;
     this.context = context;
 
@@ -135,13 +135,12 @@ export class Renderer {
       },
     });
 
-    const file = new File(fileContents);
     this.egdeRender = {
-      ...this.#getRenderDescriptor(file.edges),
+      ...this.#getRenderDescriptor(new Float32Array(file.edges)),
       pipeline: edgePipeline,
     };
     this.triangleRender = {
-      ...this.#getRenderDescriptor(file.triangles),
+      ...this.#getRenderDescriptor(new Float32Array(file.triangles)),
       pipeline: trianglePipeline,
     };
   }

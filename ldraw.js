@@ -1,22 +1,101 @@
 export class File {
   /**
+   * @type {(fileName: string) => string}
+   */
+  static getFileContents;
+
+  /**
+   * @readonly
+   * @type {readonly File[]}
+   */
+  files;
+
+  /**
+   * @readonly
+   * @type {number[]}
+   */
+  edges;
+
+  /**
+   * @readonly
+   * @type {number[]}
+   */
+  triangles;
+
+  /**
    * @param {string} contents
    */
   constructor(contents) {
-    const drawCommands = contents
+    const commands = contents
       .split("\n")
       .map((line) => line.trim())
-      .filter(Boolean)
-      .map(DrawCommand.try)
-      .filter((c) => c != null);
+      .filter(Boolean);
 
-    this.edges = new Float32Array(
-      drawCommands.filter((c) => c.isEdge).flatMap((c) => c.gpuVertices)
-    );
+    this.files = File.tryAll(commands);
 
-    this.triangles = new Float32Array(
-      drawCommands.filter((c) => !c.isEdge).flatMap((c) => c.gpuVertices)
-    );
+    const drawCommands = DrawCommand.tryAll(commands);
+
+    const ownEdges = drawCommands
+      .filter((c) => c.isEdge)
+      .flatMap((c) => c.gpuVertices);
+    const subfileEdges = this.files.flatMap((f) => f.edges);
+
+    this.edges = [...ownEdges, ...subfileEdges];
+
+    const ownTriangles = drawCommands
+      .filter((c) => !c.isEdge)
+      .flatMap((c) => c.gpuVertices);
+    const subfileTriangles = this.files.flatMap((f) => f.triangles);
+    this.triangles = [...ownTriangles, ...subfileTriangles];
+  }
+
+  /**
+   * @param {string[]} commands
+   */
+  static tryAll(commands) {
+    return commands.map(File.from).filter((c) => c != null);
+  }
+
+  /**
+   * @param {string} command
+   */
+  static from(command) {
+    let [
+      type,
+      color,
+      x,
+      y,
+      z,
+      a,
+      b,
+      c,
+      d,
+      e,
+      f,
+      g,
+      h,
+      i,
+      fileStart,
+      ...fileRest
+    ] = command.split(/\s/);
+
+    if (Number.parseInt(type, 10) !== LineType.DrawFile) {
+      return null;
+    }
+
+    const fileEnd = fileRest.at(fileRest.length - 1);
+
+    const fileName = fileEnd
+      ? new RegExp(`/.*\s(${fileStart}.*${fileEnd})$`).exec(command)?.[1]
+      : fileStart;
+
+    if (!fileName) {
+      throw new Error(
+        `Missing filename for draw file (type 1) command: ${command}`
+      );
+    }
+
+    return new File(File.getFileContents(fileName));
   }
 }
 
@@ -49,6 +128,13 @@ class DrawCommand {
      * to a GPU Coordinate (where -z is out of the page).
      */
     this.coordinatesInGpuSpace = this.coordinates.map(([x, y, z]) => [x, z, y]);
+  }
+
+  /**
+   * @param {string[]} commands
+   */
+  static tryAll(commands) {
+    return commands.map(DrawCommand.try).filter((c) => c != null);
   }
 
   /**

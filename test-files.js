@@ -170,3 +170,20 @@ export const TestFile = {
     4 16 1 1 -1 1 0 -1 -1 0 -1 -1 1 -1
     4 16 1 1 1 1 0 1 1 0 -1 1 1 -1`,
 };
+
+const map = new Map(Object.entries(TestFile));
+
+/**
+ * @param {string} filename
+ *
+ * @returns {string}
+ */
+export function getFileContents(filename) {
+  const contents = map.get(filename);
+
+  if (!contents) {
+    throw new Error(`File ${filename} not in test files`);
+  }
+
+  return contents;
+}
