@@ -1,19 +1,7 @@
-import { getCommandVertices, LineType, processFile } from "./ldraw.js";
+import { File } from "./ldraw.js";
 import * as matrix from "./matrix.js";
 
 export class Renderer {
-  /** @readonly */ #device;
-
-  /** @readonly */ #context;
-
-  /** @readonly @type {RenderDescriptor} */ #egdeRender;
-
-  /** @readonly @type {RenderDescriptor} */ #quadRender;
-
-  /** @readonly */ #uniformBuffer;
-
-  /** @readonly */ #bindGroup;
-
   /** @readonly @type {GPUVertexBufferLayout} */
   static #bufferLayout = {
     arrayStride: 3 * 4,
@@ -61,13 +49,13 @@ export class Renderer {
    * @param {GPUDevice} device
    * @param {GPUTextureFormat} format
    * @param {GPUCanvasContext} context
-   * @param {string} file
+   * @param {string} fileContents
    */
-  constructor(device, format, context, file) {
-    this.#device = device;
-    this.#context = context;
+  constructor(device, format, context, fileContents) {
+    this.device = device;
+    this.context = context;
 
-    this.#uniformBuffer = device.createBuffer({
+    this.uniformBuffer = device.createBuffer({
       label: "Rotation matrix",
       size: 16 * 4,
       usage: GPUBufferUsage.COPY_DST | GPUBufferUsage.UNIFORM,
@@ -87,13 +75,13 @@ export class Renderer {
       ],
     });
 
-    this.#bindGroup = device.createBindGroup({
+    this.bindGroup = device.createBindGroup({
       label: "Rotation uniform group",
       layout: bindGroupLayout,
       entries: [
         {
           binding: 0,
-          resource: { buffer: this.#uniformBuffer },
+          resource: { buffer: this.uniformBuffer },
         },
       ],
     });
@@ -125,39 +113,36 @@ export class Renderer {
       },
     });
 
-    const quadShaderModule = device.createShaderModule({
-      label: "Quad shader",
-      code: QUAD_SHADER,
+    const triangleShaderModule = device.createShaderModule({
+      label: "Triangle shader",
+      code: TRIANGLE_SHADER,
     });
 
-    const quadPipeline = device.createRenderPipeline({
-      label: "Quad pipeline",
+    const trianglePipeline = device.createRenderPipeline({
+      label: "Triangle pipeline",
       layout: pipelineLayout,
       primitive: { cullMode: "back" },
       depthStencil: Renderer.#depthStencil,
       vertex: {
-        module: quadShaderModule,
+        module: triangleShaderModule,
         entryPoint: "vertexMain",
         buffers: [Renderer.#bufferLayout],
       },
       fragment: {
-        module: quadShaderModule,
+        module: triangleShaderModule,
         entryPoint: "fragmentMain",
         targets: [{ format }],
       },
     });
 
-    const commands = processFile(file);
-    this.#egdeRender = {
-      ...this.#getRenderDescriptor(commands, LineType.DrawLine),
+    const file = new File(fileContents);
+    this.egdeRender = {
+      ...this.#getRenderDescriptor(file.edges),
       pipeline: edgePipeline,
     };
-    this.#quadRender = {
-      ...this.#getRenderDescriptor(commands, [
-        LineType.DrawTriangle,
-        LineType.DrawQuadrilateral,
-      ]),
-      pipeline: quadPipeline,
+    this.triangleRender = {
+      ...this.#getRenderDescriptor(file.triangles),
+      pipeline: trianglePipeline,
     };
   }
 
@@ -166,13 +151,13 @@ export class Renderer {
    */
   render(transform) {
     const transformMatrix = Renderer.#transformMatrix(transform);
-    this.#device.queue.writeBuffer(this.#uniformBuffer, 0, transformMatrix);
+    this.device.queue.writeBuffer(this.uniformBuffer, 0, transformMatrix);
 
-    const encoder = this.#device.createCommandEncoder();
+    const encoder = this.device.createCommandEncoder();
 
-    const canvasTexture = this.#context.getCurrentTexture();
+    const canvasTexture = this.context.getCurrentTexture();
     const canvasTextureView = canvasTexture.createView();
-    const depthTexture = this.#device.createTexture({
+    const depthTexture = this.device.createTexture({
       size: [canvasTexture.width, canvasTexture.height],
       format: Renderer.#depthStencil.format,
       usage: GPUTextureUsage.RENDER_ATTACHMENT,
@@ -196,14 +181,14 @@ export class Renderer {
       },
     });
 
-    pass.setBindGroup(0, this.#bindGroup);
+    pass.setBindGroup(0, this.bindGroup);
 
-    Renderer.#renderThing(this.#egdeRender, pass);
-    Renderer.#renderThing(this.#quadRender, pass);
+    Renderer.#renderThing(this.egdeRender, pass);
+    Renderer.#renderThing(this.triangleRender, pass);
 
     pass.end();
 
-    this.#device.queue.submit([encoder.finish()]);
+    this.device.queue.submit([encoder.finish()]);
   }
 
   /**
@@ -242,17 +227,14 @@ export class Renderer {
   }
 
   /**
-   * @param {import("./ldraw.js").Command[]} commands
-   * @param {number | readonly number[]} lineTypes
+   * @param {Float32Array<ArrayBuffer>} vertices
    */
-  #getRenderDescriptor(commands, lineTypes) {
-    const vertices = getCommandVertices(commands, lineTypes);
-
-    const vertexBuffer = this.#device.createBuffer({
+  #getRenderDescriptor(vertices) {
+    const vertexBuffer = this.device.createBuffer({
       size: vertices.byteLength,
       usage: GPUBufferUsage.COPY_DST | GPUBufferUsage.VERTEX,
     });
-    this.#device.queue.writeBuffer(vertexBuffer, 0, vertices);
+    this.device.queue.writeBuffer(vertexBuffer, 0, vertices);
 
     return {
       count: vertices.length / 3,
@@ -302,7 +284,7 @@ const EDGE_SHADER = `
   }
   `;
 
-const QUAD_SHADER = `
+const TRIANGLE_SHADER = `
   struct VertexInput {
     @location(0) position: vec4f,
   }

@@ -4,7 +4,6 @@
     "strict": true,
     "noImplicitAny": true,
     "exactOptionalPropertyTypes": true,
-    "noUncheckedIndexedAccess": true,
     "checkJs": true,
     "target": "es2024",
     "module": "nodenext",
