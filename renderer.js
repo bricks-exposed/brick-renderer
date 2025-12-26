@@ -175,7 +175,7 @@ export class Renderer {
           view: canvasTextureView,
           loadOp: "clear",
           storeOp: "store",
-          clearValue: { r: 0.217, g: 0.427, b: 0.878, a: 1 },
+          clearValue: { r: 0.302, g: 0.427, b: 0.878, a: 1 },
         },
       ],
       depthStencilAttachment: {
@@ -309,6 +309,6 @@ const TRIANGLE_SHADER = `
 
   @fragment
   fn fragmentMain() -> @location(0) vec4f {
-    return vec4(0.0, 1.0, 0.0, 1.0);
+    return vec4(0.86, 0.42, 0.32, 1.0);
   }
   `;
