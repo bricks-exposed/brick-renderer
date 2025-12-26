@@ -1,6 +1,20 @@
 import { PartLoader } from "./ldraw.js";
 import { Renderer } from "./renderer.js";
-import { getFileContents } from "./test-files.js";
+
+/**
+ * @param {string} path
+ */
+async function fetchPart(path) {
+  const response = await fetch(path);
+
+  if (!response.ok) {
+    return undefined;
+  }
+
+  const contents = await response.text();
+
+  return contents;
+}
 
 /**
  * @param {HTMLCanvasElement} canvas
@@ -12,11 +26,9 @@ export async function initialize(canvas, form) {
   canvas.width = canvas.clientWidth * devicePixelRatio;
   canvas.height = canvas.clientHeight * devicePixelRatio;
 
-  const partLoader = new PartLoader((name) =>
-    Promise.resolve(getFileContents(name))
-  );
+  const partLoader = new PartLoader(fetchPart);
 
-  const part = await partLoader.load("3023.dat");
+  const part = await partLoader.load("3005.dat");
 
   if (!part) {
     throw new Error(`Part not found.`);

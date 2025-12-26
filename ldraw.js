@@ -1,15 +1,26 @@
 import { apply, determinant, multiply } from "./matrix.js";
 
 export class PartLoader {
+  /** @type {(fileName: string) => Promise<string | undefined>} */
+  #accessFile;
+
+  /** @type {Map<string, Promise<string | undefined>>} */
+  #requestCache;
+
+  /** @type {Map<string, File>} */
+  #fileCache;
+
+  /** @type {Map<string, Promise<Part>>} */
+  #partCache;
+
   /**
-   * @param {(fileName: string) => Promise<string | undefined>} getFile
-   * @param {Map<string, File>} [fileCache]
-   * @param {Map<string, Part>} [partCache]
+   * @param {(fileName: string) => Promise<string | undefined>} accessFile
    */
-  constructor(getFile, fileCache = new Map(), partCache = new Map()) {
-    this.getFile = getFile;
-    this.fileCache = fileCache;
-    this.partCache = partCache;
+  constructor(accessFile) {
+    this.#accessFile = accessFile;
+    this.#fileCache = new Map();
+    this.#partCache = new Map();
+    this.#requestCache = new Map();
   }
 
   /**
@@ -18,42 +29,93 @@ export class PartLoader {
    * @returns {Promise<Part>}
    */
   async load(fileName) {
-    const cachedPart = this.partCache.get(fileName);
+    const cachedPart = this.#partCache.get(fileName);
     if (cachedPart) {
       return cachedPart;
     }
 
+    const promise = this.#loadPart(fileName);
+    this.#partCache.set(fileName, promise);
+
+    try {
+      return await promise;
+    } catch (error) {
+      this.#partCache.delete(fileName);
+      throw error;
+    }
+  }
+
+  /**
+   * @param {string} fileName
+   *
+   * @returns {Promise<Part>}
+   */
+  async #loadPart(fileName) {
     const file =
-      this.fileCache.get(fileName) ?? (await this.#loadFile(fileName));
+      this.#fileCache.get(fileName) ?? (await this.#loadFile(fileName));
 
     if (!file) {
       throw new Error(`Could not find file for ${fileName}`);
     }
 
-    this.fileCache.set(fileName, file);
+    this.#fileCache.set(fileName, file);
 
     const subParts = await Promise.all(
       file.subFiles.map((subFile) => this.load(subFile.fileName))
     );
 
-    const part = new Part(file, subParts);
-
-    this.partCache.set(fileName, part);
-
-    return part;
+    return new Part(file, subParts);
   }
 
   /**
    * @param {string} fileName
    */
   async #loadFile(fileName) {
-    const contents = await this.getFile(fileName);
+    const contents = await this.#fetch(fileName);
 
     if (contents == null) {
       return undefined;
     }
 
     return new File(fileName, contents);
+  }
+
+  /**
+   * @param {string} fileName
+   */
+  async #fetch(fileName) {
+    let prefixes;
+
+    if (fileName.startsWith("\\s")) {
+      prefixes = ["ldraw/parts"];
+    } else if (fileName.startsWith("8\\")) {
+      prefixes = ["ldraw/p"];
+    } else {
+      prefixes = ["ldraw/parts", "ldraw/p"];
+    }
+
+    const options = prefixes.map(
+      (d) => `${d}/${fileName.replaceAll("\\", "/")}`
+    );
+
+    const responses = await Promise.allSettled(
+      options.map((path) => {
+        const cachedRequest = this.#requestCache.get(path);
+
+        if (cachedRequest) {
+          return cachedRequest;
+        }
+        const request = this.#accessFile(path);
+        this.#requestCache.set(path, request);
+        return request;
+      })
+    );
+
+    const contents = responses
+      .filter((r) => r.status === "fulfilled")
+      .find((f) => f.value != null)?.value;
+
+    return contents ?? undefined;
   }
 }
 
