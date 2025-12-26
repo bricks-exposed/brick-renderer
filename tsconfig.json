@@ -1,6 +1,6 @@
 {
   "compilerOptions": {
-    "types": ["@webgpu/types"],
+    "types": ["@webgpu/types", "node"],
     "strict": true,
     "noImplicitAny": true,
     "exactOptionalPropertyTypes": true,

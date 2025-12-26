@@ -164,7 +164,7 @@ export class Part {
   }
 }
 
-class File {
+export class File {
   /**
    * @param {string} name
    * @param {string} contents
