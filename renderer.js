@@ -122,7 +122,13 @@ export class Renderer {
       label: "Triangle pipeline",
       layout: pipelineLayout,
       primitive: { cullMode: "back" },
-      depthStencil: Renderer.#depthStencil,
+      depthStencil: {
+        ...Renderer.#depthStencil,
+        // Push triangles backwards slightly
+        // so that edges are rendered above faces
+        depthBias: -1,
+        depthBiasSlopeScale: -1.0,
+      },
       vertex: {
         module: triangleShaderModule,
         entryPoint: "vertexMain",
