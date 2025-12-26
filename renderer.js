@@ -1,4 +1,4 @@
-import { File } from "./ldraw.js";
+import { Part } from "./ldraw.js";
 import * as matrix from "./matrix.js";
 
 export class Renderer {
@@ -23,9 +23,9 @@ export class Renderer {
 
   /**
    * @param {HTMLCanvasElement} canvas
-   * @param {File} file
+   * @param {Part} part
    */
-  static async for(canvas, file) {
+  static async for(canvas, part) {
     const context = canvas.getContext("webgpu");
     if (!context) {
       throw new Error("Could not get canvas webgpu context");
@@ -42,16 +42,16 @@ export class Renderer {
 
     context.configure({ device, format });
 
-    return new Renderer(device, format, context, file);
+    return new Renderer(device, format, context, part);
   }
 
   /**
    * @param {GPUDevice} device
    * @param {GPUTextureFormat} format
    * @param {GPUCanvasContext} context
-   * @param {File} file
+   * @param {Part} part
    */
-  constructor(device, format, context, file) {
+  constructor(device, format, context, part) {
     this.device = device;
     this.context = context;
 
@@ -141,9 +141,9 @@ export class Renderer {
       },
     });
 
-    const { edges, triangles } = file.render();
+    const { edges, triangles } = part.render();
 
-    this.egdeRender = {
+    this.edgeRender = {
       ...this.#getRenderDescriptor(new Float32Array(edges)),
       pipeline: edgePipeline,
     };
@@ -190,7 +190,7 @@ export class Renderer {
 
     pass.setBindGroup(0, this.bindGroup);
 
-    Renderer.#renderThing(this.egdeRender, pass);
+    Renderer.#renderThing(this.edgeRender, pass);
     Renderer.#renderThing(this.triangleRender, pass);
 
     pass.end();

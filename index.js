@@ -1,4 +1,4 @@
-import { File } from "./ldraw.js";
+import { PartLoader } from "./ldraw.js";
 import { Renderer } from "./renderer.js";
 import { getFileContents } from "./test-files.js";
 
@@ -12,9 +12,17 @@ export async function initialize(canvas, form) {
   canvas.width = canvas.clientWidth * devicePixelRatio;
   canvas.height = canvas.clientHeight * devicePixelRatio;
 
-  File.getFileContents = getFileContents;
+  const partLoader = new PartLoader((name) =>
+    Promise.resolve(getFileContents(name))
+  );
 
-  const renderer = await Renderer.for(canvas, File.for("3024.dat"));
+  const part = await partLoader.load("3023.dat");
+
+  if (!part) {
+    throw new Error(`Part not found.`);
+  }
+
+  const renderer = await Renderer.for(canvas, part);
 
   let animationFrame = -1;
 

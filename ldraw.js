@@ -1,37 +1,108 @@
 import { apply, determinant, multiply } from "./matrix.js";
 
-/**
- * Caches file instances by their name
- *
- * @type {Map<string, File>}
- */
-const FileCache = new Map();
-
-const LineType = Object.freeze({
-  Meta: 0,
-  Comment: 0,
-  DrawFile: 1,
-  DrawLine: 2,
-  DrawTriangle: 3,
-  DrawQuadrilateral: 4,
-  DrawOptionalLine: 5,
-});
-
-export class File {
+export class PartLoader {
   /**
-   * @type {(fileName: string) => string}
+   * @param {(fileName: string) => Promise<string | undefined>} getFile
+   * @param {Map<string, File>} [fileCache]
+   * @param {Map<string, Part>} [partCache]
    */
-  static getFileContents;
+  constructor(getFile, fileCache = new Map(), partCache = new Map()) {
+    this.getFile = getFile;
+    this.fileCache = fileCache;
+    this.partCache = partCache;
+  }
+
+  /**
+   * @param {string} fileName
+   *
+   * @returns {Promise<Part>}
+   */
+  async load(fileName) {
+    const cachedPart = this.partCache.get(fileName);
+    if (cachedPart) {
+      return cachedPart;
+    }
+
+    const file =
+      this.fileCache.get(fileName) ?? (await this.#loadFile(fileName));
+
+    if (!file) {
+      throw new Error(`Could not find file for ${fileName}`);
+    }
+
+    this.fileCache.set(fileName, file);
+
+    const subParts = await Promise.all(
+      file.subFiles.map((subFile) => this.load(subFile.fileName))
+    );
+
+    const part = new Part(file, subParts);
+
+    this.partCache.set(fileName, part);
+
+    return part;
+  }
 
   /**
    * @param {string} fileName
    */
-  static for(fileName) {
-    const contents = File.getFileContents(fileName);
+  async #loadFile(fileName) {
+    const contents = await this.getFile(fileName);
+
+    if (contents == null) {
+      return undefined;
+    }
 
     return new File(fileName, contents);
   }
+}
 
+export class Part {
+  /**
+   *
+   * @param {File} file
+   * @param {Part[]} subParts
+   */
+  constructor(file, subParts) {
+    this.file = file;
+    this.subParts = new Map(subParts.map((part) => [part.file.name, part]));
+  }
+
+  /**
+   * @param {import("./matrix.js").Matrix} [transformation]
+   * @param {boolean} [invert] Whether to draw the file as inverted
+   *
+   * @returns {{ edges: number[]; triangles: number[] }}
+   */
+  render(transformation, invert = false) {
+    const { edges, triangles, subFiles } = this.file.render(
+      transformation,
+      invert
+    );
+
+    // Rendering a subfile applies both the rotation/scaling defined in this file
+    // as well as any translation done to this file.
+    for (const subFile of subFiles) {
+      const subPart = this.subParts.get(subFile.fileName);
+
+      if (!subPart) {
+        throw new Error(`Could not find subpart ${subFile.fileName}`);
+      }
+
+      const subPartRender = subPart.render(
+        subFile.transformation,
+        subFile.inverted
+      );
+
+      edges.push(...subPartRender.edges);
+      triangles.push(...subPartRender.triangles);
+    }
+
+    return { edges, triangles };
+  }
+}
+
+class File {
   /**
    * @param {string} name
    * @param {string} contents
@@ -52,28 +123,10 @@ export class File {
   /**
    * @param {import("./matrix.js").Matrix | undefined} [transformation]
    * @param {boolean} [invert] Whether to draw the file as inverted
-   * @param {string} [parentFileName] For debugging
-   *
-   * @returns {{ edges: number[]; triangles: number[] }}
    */
-  render(transformation, invert = false, parentFileName) {
+  render(transformation, invert = false) {
     const edges = [];
     const triangles = [];
-
-    // Rendering a subfile applies both the rotation/scaling defined in this file
-    // as well as any translation done to this file.
-    for (const subFile of this.subFiles) {
-      const withParent = multiply(subFile.transformation, transformation);
-
-      const subfileDraws = subFile.file.render(
-        withParent,
-        subFile.inverted != invert,
-        this.name
-      );
-
-      edges.push(...subfileDraws.edges);
-      triangles.push(...subfileDraws.triangles);
-    }
 
     for (const command of this.drawCommands) {
       const vertices = command.transform(transformation, invert);
@@ -84,7 +137,15 @@ export class File {
       }
     }
 
-    return { edges, triangles };
+    return {
+      edges,
+      triangles,
+      subFiles: this.subFiles.map((subFile) => ({
+        fileName: subFile.fileName,
+        color: subFile.color,
+        ...subFile.transform(transformation, invert),
+      })),
+    };
   }
 
   /**
@@ -92,36 +153,68 @@ export class File {
    */
   static *#getSubfiles(commands) {
     const BFC_INVERTNEXT = /^0\s*BFC\s*INVERTNEXT/;
-    const FILE = /^1\s/;
 
     let invertNext = false;
+    let parsed;
 
     for (const command of commands) {
       if (BFC_INVERTNEXT.test(command)) {
         invertNext = true;
-      } else if (FILE.test(command)) {
-        const parsed = File.#parse(command);
-
-        parsed.inverted = parsed.inverted !== invertNext;
-
+      } else if ((parsed = DrawFile.from(command, invertNext))) {
         invertNext = false;
 
         yield parsed;
       }
     }
   }
+}
+
+const LineType = Object.freeze({
+  Meta: 0,
+  Comment: 0,
+  DrawFile: 1,
+  DrawLine: 2,
+  DrawTriangle: 3,
+  DrawQuadrilateral: 4,
+  DrawOptionalLine: 5,
+});
+
+class DrawFile {
+  /**
+   *
+   * @param {string} fileName
+   * @param {number} color
+   * @param {import("./matrix.js").Matrix} transformation
+   * @param {boolean} inverted
+   */
+  constructor(fileName, color, transformation, inverted) {
+    this.fileName = fileName;
+    this.color = color;
+    this.transformation = transformation;
+    this.inverted = inverted;
+  }
+
+  /**
+   * @param {import("./matrix.js").Matrix | undefined} transformation
+   * @param {boolean} invert
+   */
+  transform(transformation, invert) {
+    return {
+      transformation: multiply(this.transformation, transformation),
+      inverted: this.inverted != invert,
+    };
+  }
 
   /**
    * @param {string} command
-   *
-   * @returns {{
-   *   file: File;
-   *   transformation: import("./matrix.js").Matrix;
-   *   inverted: boolean;
-   * }}
+   * @param {boolean} parentInvert
    */
-  static #parse(command) {
-    const [_type, color, ...tokens] = command.split(/\s/);
+  static from(command, parentInvert) {
+    const [type, color, ...tokens] = command.split(/\s/);
+
+    if (type !== LineType.DrawFile.toString()) {
+      return null;
+    }
 
     const [fileStart, ...fileRest] = tokens.splice(12);
 
@@ -137,23 +230,21 @@ export class File {
       );
     }
 
-    let file;
-    if (!(file = FileCache.get(fileName))) {
-      file = File.for(fileName);
-      FileCache.set(fileName, file);
-    }
-
     const [x, y, z, ...abcdefghi] = tokens.map(Number.parseFloat);
 
     const inverted = determinant(abcdefghi) < 0;
 
     const [a, b, c, d, e, f, g, h, i] = abcdefghi;
 
-    return {
-      file,
-      transformation: [a, b, c, x, d, e, f, y, g, h, i, z, 0, 0, 0, 1],
-      inverted,
-    };
+    /** @type {import("./matrix.js").Matrix} */
+    const transformation = [a, b, c, x, d, e, f, y, g, h, i, z, 0, 0, 0, 1];
+
+    return new DrawFile(
+      fileName,
+      Number.parseInt(color),
+      transformation,
+      inverted !== parentInvert
+    );
   }
 }
 
