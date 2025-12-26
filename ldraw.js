@@ -1,3 +1,22 @@
+import { apply, determinant, multiply } from "./matrix.js";
+
+/**
+ * Caches file instances by their name
+ *
+ * @type {Map<string, File>}
+ */
+const FileCache = new Map();
+
+const LineType = Object.freeze({
+  Meta: 0,
+  Comment: 0,
+  DrawFile: 1,
+  DrawLine: 2,
+  DrawTriangle: 3,
+  DrawQuadrilateral: 4,
+  DrawOptionalLine: 5,
+});
+
 export class File {
   /**
    * @type {(fileName: string) => string}
@@ -5,83 +24,106 @@ export class File {
   static getFileContents;
 
   /**
-   * @readonly
-   * @type {readonly File[]}
+   * @param {string} fileName
    */
-  files;
+  static for(fileName) {
+    const contents = File.getFileContents(fileName);
+
+    return new File(fileName, contents);
+  }
 
   /**
-   * @readonly
-   * @type {number[]}
-   */
-  edges;
-
-  /**
-   * @readonly
-   * @type {number[]}
-   */
-  triangles;
-
-  /**
+   * @param {string} name
    * @param {string} contents
    */
-  constructor(contents) {
+  constructor(name, contents) {
+    this.name = name;
+
     const commands = contents
       .split("\n")
       .map((line) => line.trim())
       .filter(Boolean);
 
-    this.files = File.tryAll(commands);
+    this.drawCommands = DrawCommand.fromAll(commands);
 
-    const drawCommands = DrawCommand.tryAll(commands);
+    this.subFiles = [...File.#getSubfiles(commands)];
+  }
 
-    const ownEdges = drawCommands
-      .filter((c) => c.isEdge)
-      .flatMap((c) => c.gpuVertices);
-    const subfileEdges = this.files.flatMap((f) => f.edges);
+  /**
+   * @param {import("./matrix.js").Matrix | undefined} [transformation]
+   * @param {boolean} [invert] Whether to draw the file as inverted
+   * @param {string} [parentFileName] For debugging
+   *
+   * @returns {{ edges: number[]; triangles: number[] }}
+   */
+  render(transformation, invert = false, parentFileName) {
+    const edges = [];
+    const triangles = [];
 
-    this.edges = [...ownEdges, ...subfileEdges];
+    // Rendering a subfile applies both the rotation/scaling defined in this file
+    // as well as any translation done to this file.
+    for (const subFile of this.subFiles) {
+      const withParent = multiply(subFile.transformation, transformation);
 
-    const ownTriangles = drawCommands
-      .filter((c) => !c.isEdge)
-      .flatMap((c) => c.gpuVertices);
-    const subfileTriangles = this.files.flatMap((f) => f.triangles);
-    this.triangles = [...ownTriangles, ...subfileTriangles];
+      const subfileDraws = subFile.file.render(
+        withParent,
+        subFile.inverted != invert,
+        this.name
+      );
+
+      edges.push(...subfileDraws.edges);
+      triangles.push(...subfileDraws.triangles);
+    }
+
+    for (const command of this.drawCommands) {
+      const vertices = command.transform(transformation, invert);
+      if (command.isEdge) {
+        edges.push(...vertices);
+      } else {
+        triangles.push(...vertices);
+      }
+    }
+
+    return { edges, triangles };
   }
 
   /**
    * @param {string[]} commands
    */
-  static tryAll(commands) {
-    return commands.map(File.from).filter((c) => c != null);
+  static *#getSubfiles(commands) {
+    const BFC_INVERTNEXT = /^0\s*BFC\s*INVERTNEXT/;
+    const FILE = /^1\s/;
+
+    let invertNext = false;
+
+    for (const command of commands) {
+      if (BFC_INVERTNEXT.test(command)) {
+        invertNext = true;
+      } else if (FILE.test(command)) {
+        const parsed = File.#parse(command);
+
+        parsed.inverted = parsed.inverted !== invertNext;
+
+        invertNext = false;
+
+        yield parsed;
+      }
+    }
   }
 
   /**
    * @param {string} command
+   *
+   * @returns {{
+   *   file: File;
+   *   transformation: import("./matrix.js").Matrix;
+   *   inverted: boolean;
+   * }}
    */
-  static from(command) {
-    let [
-      type,
-      color,
-      x,
-      y,
-      z,
-      a,
-      b,
-      c,
-      d,
-      e,
-      f,
-      g,
-      h,
-      i,
-      fileStart,
-      ...fileRest
-    ] = command.split(/\s/);
+  static #parse(command) {
+    const [_type, color, ...tokens] = command.split(/\s/);
 
-    if (Number.parseInt(type, 10) !== LineType.DrawFile) {
-      return null;
-    }
+    const [fileStart, ...fileRest] = tokens.splice(12);
 
     const fileEnd = fileRest.at(fileRest.length - 1);
 
@@ -95,23 +137,43 @@ export class File {
       );
     }
 
-    return new File(File.getFileContents(fileName));
+    let file;
+    if (!(file = FileCache.get(fileName))) {
+      file = File.for(fileName);
+      FileCache.set(fileName, file);
+    }
+
+    const [x, y, z, ...abcdefghi] = tokens.map(Number.parseFloat);
+
+    const inverted = determinant(abcdefghi) < 0;
+
+    const [a, b, c, d, e, f, g, h, i] = abcdefghi;
+
+    return {
+      file,
+      transformation: [a, b, c, x, d, e, f, y, g, h, i, z, 0, 0, 0, 1],
+      inverted,
+    };
   }
 }
 
-export const LineType = Object.freeze({
-  Meta: 0,
-  Comment: 0,
-  DrawFile: 1,
-  DrawLine: 2,
-  DrawTriangle: 3,
-  DrawQuadrilateral: 4,
-  DrawOptionalLine: 5,
-});
-
 class DrawCommand {
-  get gpuVertices() {
-    return this.coordinatesInGpuSpace.flat();
+  /**
+   * @param {import("./matrix.js").Matrix | undefined} transformation
+   * @param {boolean} invert
+   */
+  transform(transformation, invert) {
+    const transformer = apply.bind(null, transformation);
+    const transformed = this.coordinates.map(transformer);
+    if (invert) {
+      transformed.reverse();
+    }
+
+    /*
+     * Map an LDraw Coordinate (where -y is out of the page)
+     * to a GPU Coordinate (where -z is out of the page).
+     */
+    return transformed.map(([x, y, z]) => [x, z, y]).flat();
   }
 
   /**
@@ -122,30 +184,13 @@ class DrawCommand {
     this.color = color;
     this.isEdge = color === 24; // Special edge color
     this.coordinates = coordinates;
-
-    /*
-     * Map an LDraw Coordinate (where -y is out of the page)
-     * to a GPU Coordinate (where -z is out of the page).
-     */
-    this.coordinatesInGpuSpace = this.coordinates.map(([x, y, z]) => [x, z, y]);
   }
 
   /**
    * @param {string[]} commands
    */
-  static tryAll(commands) {
-    return commands.map(DrawCommand.try).filter((c) => c != null);
-  }
-
-  /**
-   * @param {string} command
-   */
-  static try(command) {
-    try {
-      return DrawCommand.from(command);
-    } catch {
-      return null;
-    }
+  static fromAll(commands) {
+    return commands.map(DrawCommand.from).filter((c) => c != null);
   }
 
   /**
@@ -159,20 +204,18 @@ class DrawCommand {
       coordinates.push([points[i], points[i + 1], points[i + 2]]);
     }
 
-    switch (type) {
-      case LineType.DrawLine:
-      case LineType.DrawTriangle:
-        return new DrawCommand(color, coordinates);
-      case LineType.DrawQuadrilateral:
-        return new DrawQuadrilateral(color, coordinates);
-      default:
-        throw new Error(`Draw command type invalid: ${command}`);
-    }
+    const constructor = DrawCommandMap[type];
+
+    return constructor ? new constructor(color, coordinates) : null;
   }
 }
 
 class DrawQuadrilateral extends DrawCommand {
-  get gpuVertices() {
+  /**
+   * @param {number} color
+   * @param {number[][]} coordinates
+   */
+  constructor(color, coordinates) {
     /*
      * Convert LDraw's quadrilateral vertexes
      * to a vertex list that can draw triangles
@@ -184,7 +227,14 @@ class DrawQuadrilateral extends DrawCommand {
      * | b \ |
      * 4 <-- 3
      */
-    const [one, two, three, four] = this.coordinatesInGpuSpace;
-    return [one, two, three, three, four, one].flat();
+    const [one, two, three, four] = coordinates;
+    super(color, [one, two, three, three, four, one]);
   }
 }
+
+/** @type {Record<number, typeof DrawCommand>} */
+const DrawCommandMap = {
+  [LineType.DrawLine]: DrawCommand,
+  [LineType.DrawTriangle]: DrawCommand,
+  [LineType.DrawQuadrilateral]: DrawQuadrilateral,
+};

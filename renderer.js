@@ -141,12 +141,14 @@ export class Renderer {
       },
     });
 
+    const { edges, triangles } = file.render();
+
     this.egdeRender = {
-      ...this.#getRenderDescriptor(new Float32Array(file.edges)),
+      ...this.#getRenderDescriptor(new Float32Array(edges)),
       pipeline: edgePipeline,
     };
     this.triangleRender = {
-      ...this.#getRenderDescriptor(new Float32Array(file.triangles)),
+      ...this.#getRenderDescriptor(new Float32Array(triangles)),
       pipeline: trianglePipeline,
     };
   }

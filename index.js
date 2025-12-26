@@ -1,14 +1,12 @@
 import { File } from "./ldraw.js";
 import { Renderer } from "./renderer.js";
-import { getFileContents, TestFile } from "./test-files.js";
+import { getFileContents } from "./test-files.js";
 
 /**
  * @param {HTMLCanvasElement} canvas
  * @param {HTMLFormElement} form
  */
 export async function initialize(canvas, form) {
-  const fileContents = TestFile["stud.dat"];
-
   // Smoother lines on high resolution displays
   const devicePixelRatio = window.devicePixelRatio;
   canvas.width = canvas.clientWidth * devicePixelRatio;
@@ -16,9 +14,7 @@ export async function initialize(canvas, form) {
 
   File.getFileContents = getFileContents;
 
-  const file = new File(fileContents);
-
-  const renderer = await Renderer.for(canvas, file);
+  const renderer = await Renderer.for(canvas, File.for("3024.dat"));
 
   let animationFrame = -1;
 

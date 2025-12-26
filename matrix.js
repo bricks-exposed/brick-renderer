@@ -202,13 +202,46 @@ export function fromScaling(factor) {
 }
 
 /**
+ * @param {Matrix | undefined} matrix
+ * @param {number[]} vector
+ *
+ * @returns {number[]}
+ */
+export function apply(matrix, vector) {
+  if (!matrix) {
+    return vector;
+  }
+
+  const [u, v, w] = vector;
+
+  const [a, b, c, x, d, e, f, y, g, h, i, z] = matrix;
+
+  return [
+    a * u + b * v + c * w + x,
+    d * u + e * v + f * w + y,
+    g * u + h * v + i * w + z,
+  ];
+}
+
+/**
+ * @param {number[]} matrix3x3
+ */
+export function determinant([a, d, g, b, e, h, c, f, i]) {
+  return a * e * i + b * f * g + c * d * h - c * e * g - b * d * i - a * f * h;
+}
+
+/**
  *
  * @param {Matrix} a
- * @param {Matrix} b
+ * @param {Matrix | undefined} b
  *
  * @returns {Matrix}
  */
 export function multiply(a, b) {
+  if (!b) {
+    return a;
+  }
+
   const [
     a00,
     a01,
