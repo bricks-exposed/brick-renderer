@@ -220,7 +220,7 @@ export class Renderer {
     return new Float32Array(
       matrix.transform(
         [
-          matrix.orthographic(-1, 1, -1, 1, -10, 10),
+          matrix.orthographic(-10, 10, -10, 10, -20, 20),
           matrix.fromRotationX(transform.rotateX),
           matrix.fromRotationY(transform.rotateY),
           matrix.fromRotationZ(transform.rotateZ),
