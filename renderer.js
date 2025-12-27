@@ -194,6 +194,11 @@ export class Renderer {
 
     const { lines, optionalLines, triangles } = part.render();
 
+    const { largestExtent, center } = part.boundingBox();
+
+    this.viewBox = largestExtent / 2;
+    this.center = center;
+
     const edgeVertexBuffer = this.device.createBuffer({
       size: lines.byteLength,
       usage: GPUBufferUsage.COPY_DST | GPUBufferUsage.VERTEX,
@@ -236,7 +241,7 @@ export class Renderer {
    * @param {Transform} transform
    */
   render(transform) {
-    const transformMatrix = Renderer.#transformMatrix(transform);
+    const transformMatrix = this.#transformMatrix(transform);
     this.device.queue.writeBuffer(this.uniformBuffer, 0, transformMatrix);
 
     const encoder = this.device.createCommandEncoder();
@@ -292,15 +297,27 @@ export class Renderer {
    *
    * @returns {Float32Array<ArrayBuffer>}
    */
-  static #transformMatrix(transform) {
+  #transformMatrix(transform) {
     return new Float32Array(
       matrix.transform(
         [
-          matrix.orthographic(-10, 10, -10, 10, -20, 20),
+          matrix.orthographic(
+            -this.viewBox,
+            this.viewBox,
+            -this.viewBox,
+            this.viewBox,
+            -(this.viewBox * 2),
+            this.viewBox * 2
+          ),
           matrix.fromRotationX(transform.rotateX),
           matrix.fromRotationY(transform.rotateY),
           matrix.fromRotationZ(transform.rotateZ),
           matrix.fromScaling(transform.scale),
+          matrix.fromTranslation(
+            -this.center[0],
+            -this.center[1],
+            -this.center[2]
+          ),
         ],
         matrix.identity
       )

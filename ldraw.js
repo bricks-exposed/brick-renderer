@@ -163,6 +163,37 @@ export class Part {
       triangles: new Float32Array(accumulator.triangles),
     };
   }
+
+  boundingBox() {
+    const { lines, triangles } = this.render();
+
+    const { min, max } = [...lines, ...triangles].reduce(
+      function (acc, point, index) {
+        // [x, y, z, x, y, z, x, y, z, ...]
+        const dimension = index % 3;
+
+        acc.min[dimension] = Math.min(acc.min[dimension], point);
+        acc.max[dimension] = Math.max(acc.max[dimension], point);
+
+        return acc;
+      },
+      {
+        min: [Infinity, Infinity, Infinity],
+        max: [-Infinity, -Infinity, -Infinity],
+      }
+    );
+
+    const center = [
+      (min[0] + max[0]) / 2,
+      (min[1] + max[1]) / 2,
+      (min[2] + max[2]) / 2,
+    ];
+
+    const extents = [max[0] - min[0], max[1] - min[1], max[2] - min[2]];
+    const largestExtent = Math.max(...extents);
+
+    return { min, max, largestExtent, center };
+  }
 }
 
 /**
