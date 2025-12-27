@@ -69,7 +69,7 @@ export class Renderer {
 
     const format = navigator.gpu.getPreferredCanvasFormat();
 
-    context.configure({ device, format });
+    context.configure({ device, format, alphaMode: "premultiplied" });
 
     return new Renderer(device, format, context, part);
   }
@@ -260,7 +260,6 @@ export class Renderer {
           view: canvasTextureView,
           loadOp: "clear",
           storeOp: "store",
-          clearValue: { r: 0.302, g: 0.427, b: 0.878, a: 1 },
         },
       ],
       depthStencilAttachment: {
