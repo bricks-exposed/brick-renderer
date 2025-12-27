@@ -1,5 +1,5 @@
-import { PartLoader } from "./ldraw.js";
-import { PartDb } from "./partdb.js";
+import { PartLoader } from "./part-loader.js";
+import { PartDb } from "./part-db.js";
 import { Renderer } from "./renderer.js";
 
 /**

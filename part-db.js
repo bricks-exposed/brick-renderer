@@ -1,4 +1,4 @@
-/** @import { FileContentsCache } from "./ldraw.js" */
+/** @import { FileContentsCache } from "./part-loader.js" */
 
 /**
  * @implements {FileContentsCache}
