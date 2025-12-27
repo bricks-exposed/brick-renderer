@@ -123,11 +123,14 @@ describe("Part rendering", function () {
     );
     const part = new Part(file, []);
 
-    const { edges, triangles } = part.render();
+    const { lines, triangles } = part.render();
 
     // Line 1: LDraw (0,0,0) to (1,0,0) → GPU [0,0,0] to [1,0,0]
     // Line 2: LDraw (1,0,0) to (1,1,0) → GPU [1,0,0] to [1,0,1]
-    assert.deepEqual(edges, [0, 0, 0, 1, 0, 0, 1, 0, 0, 1, 0, 1]);
+    assert.deepEqual(
+      lines,
+      new Float32Array([0, 0, 0, 1, 0, 0, 1, 0, 0, 1, 0, 1])
+    );
     assert.equal(triangles.length, 0);
   });
 
@@ -141,12 +144,12 @@ describe("Part rendering", function () {
     );
     const part = new Part(file, []);
 
-    const { edges } = part.render();
+    const { lines } = part.render();
 
     // LDraw: (0, 1, 0) and (0, 2, 0)
     // Should map to GPU: (0, 0, 1) and (0, 0, 2)
     // Format: [x, z, y] for each vertex
-    assert.deepEqual(edges, [0, 0, 1, 0, 0, 2]);
+    assert.deepEqual(lines, new Float32Array([0, 0, 1, 0, 0, 2]));
   });
 
   it("should render triangles", function () {
@@ -159,12 +162,12 @@ describe("Part rendering", function () {
     );
     const part = new Part(file, []);
 
-    const { edges, triangles } = part.render();
+    const { lines, triangles } = part.render();
 
-    assert.equal(edges.length, 0);
+    assert.equal(lines.length, 0);
     // Triangle vertices: (0,0,0), (1,0,0), (0,1,0)
     // Mapped to GPU [x,z,y]: (0,0,0), (1,0,0), (0,0,1)
-    assert.deepEqual(triangles, [0, 0, 0, 1, 0, 0, 0, 0, 1]);
+    assert.deepEqual(triangles, new Float32Array([0, 0, 0, 1, 0, 0, 0, 0, 1]));
   });
 
   it("should render quadrilaterals as two triangles", function () {
@@ -185,7 +188,7 @@ describe("Part rendering", function () {
     // Triangle 2: (1,1,0), (0,1,0), (0,0,0) -> GPU: (1,0,1), (0,0,1), (0,0,0)
     assert.deepEqual(
       triangles,
-      [0, 0, 0, 1, 0, 0, 1, 0, 1, 1, 0, 1, 0, 0, 1, 0, 0, 0]
+      new Float32Array([0, 0, 0, 1, 0, 0, 1, 0, 1, 1, 0, 1, 0, 0, 1, 0, 0, 0])
     );
   });
 
@@ -201,13 +204,13 @@ describe("Part rendering", function () {
 
     const { triangles } = part.render(
       // Scale by 2 in all dimensions
-      [2, 0, 0, 0, 0, 2, 0, 0, 0, 0, 2, 0, 0, 0, 0, 1]
+      { transformation: [2, 0, 0, 0, 0, 2, 0, 0, 0, 0, 2, 0, 0, 0, 0, 1] }
     );
 
     // Original vertices: (1,0,0), (2,0,0), (1,1,0)
     // Scaled by 2: (2,0,0), (4,0,0), (2,2,0)
     // Mapped to GPU [x,z,y]: (2,0,0), (4,0,0), (2,0,2)
-    assert.deepEqual(triangles, [2, 0, 0, 4, 0, 0, 2, 0, 2]);
+    assert.deepEqual(triangles, new Float32Array([2, 0, 0, 4, 0, 0, 2, 0, 2]));
   });
 
   it("should handle inversion", function () {
@@ -220,14 +223,20 @@ describe("Part rendering", function () {
     );
     const part = new Part(file, []);
 
-    const normal = part.render(undefined, false);
-    const inverted = part.render(undefined, true);
+    const normal = part.render({ invert: false });
+    const inverted = part.render({ invert: true });
 
     // Normal: (0,0,0), (1,0,0), (0,1,0) -> GPU: (0,0,0), (1,0,0), (0,0,1)
-    assert.deepEqual(normal.triangles, [0, 0, 0, 1, 0, 0, 0, 0, 1]);
+    assert.deepEqual(
+      normal.triangles,
+      new Float32Array([0, 0, 0, 1, 0, 0, 0, 0, 1])
+    );
 
     // Inverted reverses coords before mapping: (0,1,0), (1,0,0), (0,0,0) -> GPU: (0,0,1), (1,0,0), (0,0,0)
-    assert.deepEqual(inverted.triangles, [0, 0, 1, 1, 0, 0, 0, 0, 0]);
+    assert.deepEqual(
+      inverted.triangles,
+      new Float32Array([0, 0, 1, 1, 0, 0, 0, 0, 0])
+    );
   });
 
   it("should render subparts with transformations", function () {
@@ -255,7 +264,10 @@ describe("Part rendering", function () {
     // Translated by (10,0,0)
     // Becomes (10,0,0), (11,0,0), (10,1,0)
     // Mapped to GPU [x,z,y]: (10,0,0), (11,0,0), (10,0,1)
-    assert.deepEqual(triangles, [10, 0, 0, 11, 0, 0, 10, 0, 1]);
+    assert.deepEqual(
+      triangles,
+      new Float32Array([10, 0, 0, 11, 0, 0, 10, 0, 1])
+    );
   });
 
   it("should handle BFC INVERTNEXT", function () {
@@ -281,7 +293,10 @@ describe("Part rendering", function () {
     const result = parentPart.render();
 
     // Child triangle inverted: reversed coords before mapping (0,1,0), (1,0,0), (0,0,0) -> GPU: (0,0,1), (1,0,0), (0,0,0)
-    assert.deepEqual(result.triangles, [0, 0, 1, 1, 0, 0, 0, 0, 0]);
+    assert.deepEqual(
+      result.triangles,
+      new Float32Array([0, 0, 1, 1, 0, 0, 0, 0, 0])
+    );
   });
 
   it("should detect negative determinant as inverted", function () {
@@ -309,6 +324,9 @@ describe("Part rendering", function () {
     // Original: (0,0,0), (1,0,0), (0,1,0)
     // Transformed: (0,0,0), (-1,0,0), (0,1,0)
     // Inverted (reversed before mapping): (0,1,0), (-1,0,0), (0,0,0) -> GPU: (0,0,1), (-1,0,0), (0,0,0)
-    assert.deepEqual(result.triangles, [0, 0, 1, -1, 0, 0, 0, 0, 0]);
+    assert.deepEqual(
+      result.triangles,
+      new Float32Array([0, 0, 1, -1, 0, 0, 0, 0, 0])
+    );
   });
 });

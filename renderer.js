@@ -14,6 +14,35 @@ export class Renderer {
     ],
   };
 
+  /** @readonly @type {GPUVertexBufferLayout} */
+  static #optionalLineBufferLayout = {
+    // Instance buffer: 4 vec3f points (p1, p2, c1, c2) = 12 floats
+    arrayStride: 12 * 4,
+    stepMode: "instance",
+    attributes: [
+      {
+        format: "float32x3",
+        offset: 0,
+        shaderLocation: 0, // point 1
+      },
+      {
+        format: "float32x3",
+        offset: 12,
+        shaderLocation: 1, // point 2
+      },
+      {
+        format: "float32x3",
+        offset: 24,
+        shaderLocation: 2, // control point 1
+      },
+      {
+        format: "float32x3",
+        offset: 36,
+        shaderLocation: 3, // control point 2
+      },
+    ],
+  };
+
   /** @readonly @type {GPUDepthStencilState} */
   static #depthStencil = {
     depthWriteEnabled: true,
@@ -141,16 +170,66 @@ export class Renderer {
       },
     });
 
-    const { edges, triangles } = part.render();
+    const optionalLineShaderModule = device.createShaderModule({
+      label: "Optional line shader",
+      code: OPTIONAL_LINE_SHADER,
+    });
 
+    const optionalLinePipeline = device.createRenderPipeline({
+      label: "Optional line pipeline",
+      layout: pipelineLayout,
+      primitive: { topology: "line-list" },
+      depthStencil: Renderer.#depthStencil,
+      vertex: {
+        module: optionalLineShaderModule,
+        entryPoint: "vertexMain",
+        buffers: [Renderer.#optionalLineBufferLayout],
+      },
+      fragment: {
+        module: optionalLineShaderModule,
+        entryPoint: "fragmentMain",
+        targets: [{ format }],
+      },
+    });
+
+    const { lines, optionalLines, triangles } = part.render();
+
+    const edgeVertexBuffer = this.device.createBuffer({
+      size: lines.byteLength,
+      usage: GPUBufferUsage.COPY_DST | GPUBufferUsage.VERTEX,
+    });
+    this.device.queue.writeBuffer(edgeVertexBuffer, 0, lines);
     this.edgeRender = {
-      ...this.#getRenderDescriptor(new Float32Array(edges)),
+      count: lines.length / 3,
+      vertexBuffer: edgeVertexBuffer,
       pipeline: edgePipeline,
     };
+
+    const triangleVertexBuffer = this.device.createBuffer({
+      size: triangles.byteLength,
+      usage: GPUBufferUsage.COPY_DST | GPUBufferUsage.VERTEX,
+    });
+    this.device.queue.writeBuffer(triangleVertexBuffer, 0, triangles);
     this.triangleRender = {
-      ...this.#getRenderDescriptor(new Float32Array(triangles)),
+      count: triangles.length / 3,
+      vertexBuffer: triangleVertexBuffer,
       pipeline: trianglePipeline,
     };
+
+    this.optionalLineRender = {
+      count: optionalLines.length / 12, // 4 points × 3 coords = 12 per line
+      vertexBuffer: this.device.createBuffer({
+        size: optionalLines.byteLength,
+        usage: GPUBufferUsage.COPY_DST | GPUBufferUsage.VERTEX,
+      }),
+      pipeline: optionalLinePipeline,
+    };
+
+    this.device.queue.writeBuffer(
+      this.optionalLineRender.vertexBuffer,
+      0,
+      optionalLines
+    );
   }
 
   /**
@@ -190,27 +269,22 @@ export class Renderer {
 
     pass.setBindGroup(0, this.bindGroup);
 
-    Renderer.#renderThing(this.edgeRender, pass);
-    Renderer.#renderThing(this.triangleRender, pass);
+    pass.setPipeline(this.edgeRender.pipeline);
+    pass.setVertexBuffer(0, this.edgeRender.vertexBuffer);
+    pass.draw(this.edgeRender.count);
+
+    pass.setPipeline(this.triangleRender.pipeline);
+    pass.setVertexBuffer(0, this.triangleRender.vertexBuffer);
+    pass.draw(this.triangleRender.count);
+
+    // Render optional lines
+    pass.setPipeline(this.optionalLineRender.pipeline);
+    pass.setVertexBuffer(0, this.optionalLineRender.vertexBuffer);
+    pass.draw(2, this.optionalLineRender.count);
 
     pass.end();
 
     this.device.queue.submit([encoder.finish()]);
-  }
-
-  /**
-   *
-   * @param {RenderDescriptor} render
-   * @param {GPURenderPassEncoder} pass
-   */
-  static #renderThing(render, pass) {
-    if (!render.count) {
-      return;
-    }
-
-    pass.setPipeline(render.pipeline);
-    pass.setVertexBuffer(0, render.vertexBuffer);
-    pass.draw(render.count);
   }
 
   /**
@@ -231,22 +305,6 @@ export class Renderer {
         matrix.identity
       )
     );
-  }
-
-  /**
-   * @param {Float32Array<ArrayBuffer>} vertices
-   */
-  #getRenderDescriptor(vertices) {
-    const vertexBuffer = this.device.createBuffer({
-      size: vertices.byteLength,
-      usage: GPUBufferUsage.COPY_DST | GPUBufferUsage.VERTEX,
-    });
-    this.device.queue.writeBuffer(vertexBuffer, 0, vertices);
-
-    return {
-      count: vertices.length / 3,
-      vertexBuffer,
-    };
   }
 }
 
@@ -290,6 +348,76 @@ const EDGE_SHADER = `
     return vec4(1.0, 1.0, 1.0, 1.0);
   }
   `;
+
+// dot((ci - p1) x (p2 - p1), view) > 0
+
+const OPTIONAL_LINE_SHADER = `
+  struct VertexInput {
+    @location(0) p1: vec4f,
+    @location(1) p2: vec4f,
+    @location(2) c1: vec4f,
+    @location(3) c2: vec4f,
+  }
+
+  struct VertexOutput {
+    @builtin(position) position: vec4f,
+    @location(0) @interpolate(flat) shouldDiscard: f32,
+  }
+
+  @group(0) @binding(0) var<uniform> rotationMatrix: mat4x4f;
+
+  @vertex
+  fn vertexMain(
+    input: VertexInput,
+    @builtin(vertex_index) vertexIndex: u32
+  ) -> VertexOutput {
+    let p1 = rotationMatrix * input.p1;
+    let p2 = rotationMatrix * input.p2;
+    let c1 = rotationMatrix * input.c1;
+    let c2 = rotationMatrix * input.c2;
+
+    let edge = (p2 - p1).xyz;
+    let toC1 = (c1 - p1).xyz;
+    let toC2 = (c2 - p1).xyz;
+
+    // A vector pointing at the camera — hardcoded for now.
+    let viewNormal = vec3f(0.0, 0.0, 1.0);
+
+    // The cross product gives us a vector perpendicular
+    // to both the edge and the control points.
+    // The dot product then gets us the magnitude along
+    // the camera's vector.
+    let cross1 = dot(cross(edge, toC1), viewNormal);
+    let cross2 = dot(cross(edge, toC2), viewNormal);
+
+    // Only render an optional line if the control
+    // points are on either side. If one point is
+    // "behind" the edge from the camera's perspective
+    // and the other is in "front", then their magnitudes
+    // will have different signs and their product will
+    // be negative.
+    let shouldShow = cross1 * cross2 < 0.0;
+
+    // We need to render two points to make a line,
+    // so every pass we flip betwen the first point and the second.
+    let endpointIndex = vertexIndex & 1u;
+    let point = select(p1, p2, endpointIndex == 1u);
+
+    var output: VertexOutput;
+    output.position = point;
+    output.shouldDiscard = select(1.0, 0.0, shouldShow);
+    return output;
+  }
+
+  @fragment
+  fn fragmentMain(input: VertexOutput) -> @location(0) vec4f {
+    // Discard fragments where the line shouldn't be drawn
+    if (input.shouldDiscard < 0.5) {
+      discard;
+    }
+    return vec4f(1.0, 1.0, 1.0, 1.0);
+  }
+`;
 
 const TRIANGLE_SHADER = `
   struct VertexInput {

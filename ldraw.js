@@ -1,4 +1,4 @@
-import { apply, determinant, multiply } from "./matrix.js";
+import { apply, determinant, identity, multiply } from "./matrix.js";
 
 export class PartLoader {
   /** @type {(fileName: string) => Promise<string | undefined>} */
@@ -61,7 +61,7 @@ export class PartLoader {
     this.#fileCache.set(fileName, file);
 
     const subParts = await Promise.all(
-      file.subFiles.map((subFile) => this.load(subFile.fileName))
+      file.subFiles.map((subFile) => this.load(subFile))
     );
 
     return new Part(file, subParts);
@@ -86,7 +86,7 @@ export class PartLoader {
   async #fetch(fileName) {
     let prefixes;
 
-    if (fileName.startsWith("\\s")) {
+    if (fileName.startsWith("s\\")) {
       prefixes = ["ldraw/parts"];
     } else if (fileName.startsWith("8\\")) {
       prefixes = ["ldraw/p"];
@@ -127,42 +127,72 @@ export class Part {
    */
   constructor(file, subParts) {
     this.file = file;
-    this.subParts = new Map(subParts.map((part) => [part.file.name, part]));
+    this.subParts = new Map(subParts.map((p) => [p.file.name, p]));
   }
 
   /**
-   * @param {import("./matrix.js").Matrix} [transformation]
-   * @param {boolean} [invert] Whether to draw the file as inverted
+   * @param {Partial<RenderArgs>} [args]
+   * @param {RenderResult} [accumulator]
    *
-   * @returns {{ edges: number[]; triangles: number[] }}
+   * @returns {Record<GeometryType, Float32Array<ArrayBuffer>>}
    */
-  render(transformation, invert = false) {
-    const { edges, triangles, subFiles } = this.file.render(
-      transformation,
-      invert
-    );
+  render(args, accumulator) {
+    const renderArgs = {
+      color: args?.color ?? 16,
+      transformation: args?.transformation,
+      invert: args?.invert ?? false,
+    };
 
-    // Rendering a subfile applies both the rotation/scaling defined in this file
-    // as well as any translation done to this file.
+    accumulator ??= EmptyRenderResult();
+
+    const { subFiles } = this.file.render(renderArgs, accumulator);
+
     for (const subFile of subFiles) {
       const subPart = this.subParts.get(subFile.fileName);
 
       if (!subPart) {
-        throw new Error(`Could not find subpart ${subFile.fileName}`);
+        throw new Error(`Could not find subpart ${subFile}`);
       }
 
-      const subPartRender = subPart.render(
-        subFile.transformation,
-        subFile.inverted
-      );
-
-      edges.push(...subPartRender.edges);
-      triangles.push(...subPartRender.triangles);
+      subPart.render(subFile, { ...accumulator, subFiles: [] });
     }
 
-    return { edges, triangles };
+    return {
+      lines: new Float32Array(accumulator.lines),
+      optionalLines: new Float32Array(accumulator.optionalLines),
+      triangles: new Float32Array(accumulator.triangles),
+    };
   }
 }
+
+/**
+ * @typedef {"lines" | "optionalLines" | "triangles"} GeometryType
+ */
+
+/** @typedef {Record<GeometryType, number[]>} Geometry */
+
+/**
+ * @typedef {{
+ *   color: number;
+ *   transformation: import("./matrix.js").Matrix | undefined;
+ *   invert: boolean;
+ * }} RenderArgs
+ */
+
+/**
+ * @typedef {{
+ *   fileName: string;
+ * } & RenderArgs} SubfileRenderArgs
+ */
+
+/** @typedef {Geometry & { subFiles: SubfileRenderArgs[]}} RenderResult */
+
+const EmptyRenderResult = () => ({
+  lines: [],
+  optionalLines: [],
+  triangles: [],
+  subFiles: [],
+});
 
 export class File {
   /**
@@ -177,43 +207,32 @@ export class File {
       .map((line) => line.trim())
       .filter(Boolean);
 
-    this.drawCommands = DrawCommand.fromAll(commands);
-
-    this.subFiles = [...File.#getSubfiles(commands)];
+    this.commands = [...File.getCommands(commands)];
+    this.subFiles = this.commands
+      .filter((c) => c instanceof DrawFile)
+      .map((c) => c.fileName);
   }
 
   /**
-   * @param {import("./matrix.js").Matrix | undefined} [transformation]
-   * @param {boolean} [invert] Whether to draw the file as inverted
+   * @param {RenderArgs} args
+   * @param {RenderResult} [accumulator]
+   *
+   * @returns {RenderResult}
    */
-  render(transformation, invert = false) {
-    const edges = [];
-    const triangles = [];
+  render(args, accumulator) {
+    accumulator ??= EmptyRenderResult();
 
-    for (const command of this.drawCommands) {
-      const vertices = command.transform(transformation, invert);
-      if (command.isEdge) {
-        edges.push(...vertices);
-      } else {
-        triangles.push(...vertices);
-      }
+    for (const command of this.commands) {
+      command.render(args, accumulator);
     }
 
-    return {
-      edges,
-      triangles,
-      subFiles: this.subFiles.map((subFile) => ({
-        fileName: subFile.fileName,
-        color: subFile.color,
-        ...subFile.transform(transformation, invert),
-      })),
-    };
+    return accumulator;
   }
 
   /**
    * @param {string[]} commands
    */
-  static *#getSubfiles(commands) {
+  static *getCommands(commands) {
     const BFC_INVERTNEXT = /^0\s*BFC\s*INVERTNEXT/;
 
     let invertNext = false;
@@ -222,7 +241,7 @@ export class File {
     for (const command of commands) {
       if (BFC_INVERTNEXT.test(command)) {
         invertNext = true;
-      } else if ((parsed = DrawFile.from(command, invertNext))) {
+      } else if ((parsed = DrawCommand.from(command, invertNext))) {
         invertNext = false;
 
         yield parsed;
@@ -241,30 +260,84 @@ const LineType = Object.freeze({
   DrawOptionalLine: 5,
 });
 
-class DrawFile {
+class Command {
   /**
-   *
-   * @param {string} fileName
-   * @param {number} color
-   * @param {import("./matrix.js").Matrix} transformation
-   * @param {boolean} inverted
+   * @param {string} command
+   * @param {boolean} invert
    */
-  constructor(fileName, color, transformation, inverted) {
-    this.fileName = fileName;
+  static from(command, invert) {
+    const [type] = command.split(/\s+/);
+    const parsedType = Number.parseInt(type, 10);
+
+    const constructor = CommandMap[parsedType];
+
+    if (!constructor) {
+      return null;
+    }
+
+    return constructor.from(command, invert);
+  }
+}
+
+/** @abstract */
+class DrawCommand extends Command {
+  /**
+   * @param {number} color
+   * @param {boolean} invert
+   */
+  constructor(color, invert) {
+    super();
     this.color = color;
-    this.transformation = transformation;
-    this.inverted = inverted;
+    this.invert = invert;
   }
 
   /**
-   * @param {import("./matrix.js").Matrix | undefined} transformation
+   * @abstract
+   *
+   * @param {RenderArgs} args
+   * @param {RenderResult} [accumulator]
+   *
+   * @returns {RenderResult}
+   */
+  render(args, accumulator) {
+    throw new Error("Not implemented");
+  }
+
+  /**
    * @param {boolean} invert
    */
-  transform(transformation, invert) {
-    return {
+  shouldInvert(invert) {
+    return invert != this.invert;
+  }
+}
+
+class DrawFile extends DrawCommand {
+  /**
+   * @param {string} fileName
+   * @param {RenderArgs} args
+   */
+  constructor(fileName, { color, transformation, invert }) {
+    super(color, invert);
+    this.transformation = transformation ?? identity;
+    this.fileName = fileName;
+  }
+
+  /**
+   * @param {RenderArgs} invert
+   * @param {RenderResult} [accumulator]
+   *
+   * @returns {RenderResult}
+   */
+  render({ transformation, invert }, accumulator) {
+    accumulator ??= EmptyRenderResult();
+    accumulator.subFiles.push({
+      fileName: this.fileName,
+      color: this.color,
       transformation: multiply(this.transformation, transformation),
-      inverted: this.inverted != invert,
-    };
+      invert: this.shouldInvert(invert),
+    });
+
+    return accumulator;
   }
 
   /**
@@ -272,11 +345,7 @@ class DrawFile {
    * @param {boolean} parentInvert
    */
   static from(command, parentInvert) {
-    const [type, color, ...tokens] = command.split(/\s/);
-
-    if (type !== LineType.DrawFile.toString()) {
-      return null;
-    }
+    const [_type, color, ...tokens] = command.split(/\s+/);
 
     const [fileStart, ...fileRest] = tokens.splice(12);
 
@@ -298,27 +367,41 @@ class DrawFile {
 
     const [a, b, c, d, e, f, g, h, i] = abcdefghi;
 
-    /** @type {import("./matrix.js").Matrix} */
-    const transformation = [a, b, c, x, d, e, f, y, g, h, i, z, 0, 0, 0, 1];
-
-    return new DrawFile(
-      fileName,
-      Number.parseInt(color),
-      transformation,
-      inverted !== parentInvert
-    );
+    return new DrawFile(fileName, {
+      color: Number.parseInt(color),
+      transformation: [a, b, c, x, d, e, f, y, g, h, i, z, 0, 0, 0, 1],
+      invert: inverted !== parentInvert,
+    });
   }
 }
 
-class DrawCommand {
+class DrawGeometry extends DrawCommand {
+  /** @readonly @type {GeometryType} */
+  type = "triangles";
+
   /**
-   * @param {import("./matrix.js").Matrix | undefined} transformation
+   * @param {number} color
+   * @param {number[][]} coordinates
    * @param {boolean} invert
    */
-  transform(transformation, invert) {
+  constructor(color, coordinates, invert) {
+    super(color, invert);
+    this.coordinates = coordinates;
+  }
+
+  /**
+   * @param {RenderArgs} args
+   * @param {RenderResult} [accumulator]
+   *
+   * @returns {RenderResult}
+   */
+  render({ transformation, invert }, accumulator) {
+    accumulator ??= EmptyRenderResult();
+
     const transformer = apply.bind(null, transformation);
     const transformed = this.coordinates.map(transformer);
-    if (invert) {
+
+    if (this.shouldInvert(invert)) {
       transformed.reverse();
     }
 
@@ -326,49 +409,43 @@ class DrawCommand {
      * Map an LDraw Coordinate (where -y is out of the page)
      * to a GPU Coordinate (where -z is out of the page).
      */
-    return transformed.map(([x, y, z]) => [x, z, y]).flat();
-  }
+    const data = transformed.map(([x, y, z]) => [x, z, y]).flat();
 
-  /**
-   * @param {number} color
-   * @param {number[][]} coordinates
-   */
-  constructor(color, coordinates) {
-    this.color = color;
-    this.isEdge = color === 24; // Special edge color
-    this.coordinates = coordinates;
-  }
+    accumulator[this.type].push(...data);
 
-  /**
-   * @param {string[]} commands
-   */
-  static fromAll(commands) {
-    return commands.map(DrawCommand.from).filter((c) => c != null);
+    return accumulator;
   }
 
   /**
    * @param {string} command
+   * @param {boolean} invert
    */
-  static from(command) {
-    const [type, color, ...points] = command.split(/\s/).map(Number.parseFloat);
+  static from(command, invert) {
+    const [_type, color, ...points] = command
+      .split(/\s+/)
+      .map(Number.parseFloat);
 
     const coordinates = [];
     for (let i = 0; i < points.length; i += 3) {
       coordinates.push([points[i], points[i + 1], points[i + 2]]);
     }
 
-    const constructor = DrawCommandMap[type];
-
-    return constructor ? new constructor(color, coordinates) : null;
+    return new this(color, coordinates, invert);
   }
 }
 
-class DrawQuadrilateral extends DrawCommand {
+class DrawTriangle extends DrawGeometry {
+  /** @type {GeometryType} */
+  type = "triangles";
+}
+
+class DrawQuadrilateral extends DrawTriangle {
   /**
    * @param {number} color
    * @param {number[][]} coordinates
+   * @param {boolean} invert
    */
-  constructor(color, coordinates) {
+  constructor(color, coordinates, invert) {
     /*
      * Convert LDraw's quadrilateral vertexes
      * to a vertex list that can draw triangles
@@ -381,13 +458,30 @@ class DrawQuadrilateral extends DrawCommand {
      * 4 <-- 3
      */
     const [one, two, three, four] = coordinates;
-    super(color, [one, two, three, three, four, one]);
+    super(color, [one, two, three, three, four, one], invert);
   }
 }
 
-/** @type {Record<number, typeof DrawCommand>} */
-const DrawCommandMap = {
-  [LineType.DrawLine]: DrawCommand,
-  [LineType.DrawTriangle]: DrawCommand,
+class DrawLine extends DrawGeometry {
+  /** @type {GeometryType} */
+  type = "lines";
+
+  shouldInvert() {
+    // Never invert lines
+    return false;
+  }
+}
+
+class DrawOptionalLine extends DrawLine {
+  /** @type {GeometryType} */
+  type = "optionalLines";
+}
+
+/** @type {Record<number, { from(command: string, invert: boolean): DrawCommand}>} */
+const CommandMap = {
+  [LineType.DrawFile]: DrawFile,
+  [LineType.DrawLine]: DrawLine,
+  [LineType.DrawTriangle]: DrawTriangle,
   [LineType.DrawQuadrilateral]: DrawQuadrilateral,
+  [LineType.DrawOptionalLine]: DrawOptionalLine,
 };
