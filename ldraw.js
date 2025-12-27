@@ -1,8 +1,15 @@
+/** @import { Matrix } from "./matrix.js" */
 import { determinant, identity, multiply } from "./matrix.js";
 
+/**
+ * @typedef {{
+ *   get(fileName: string): Promise<string | undefined>;
+ *   set(fileName: string, contents: string): Promise<void>;
+ * }} FileContentsCache
+ */
+
 export class PartLoader {
-  /** @type {(fileName: string) => Promise<string | undefined>} */
-  #accessFile;
+  #getPaths;
 
   /** @type {Map<string, Promise<string | undefined>>} */
   #requestCache;
@@ -13,14 +20,18 @@ export class PartLoader {
   /** @type {Map<string, Promise<Part>>} */
   #partCache;
 
+  #fileContentsCache;
+
   /**
-   * @param {(fileName: string) => Promise<string | undefined>} accessFile
+   * @param {(fileName: string, paths: string[]) => Promise<string | undefined>} accessFile
+   * @param {FileContentsCache} [fileContentsCache]
    */
-  constructor(accessFile) {
-    this.#accessFile = accessFile;
+  constructor(accessFile, fileContentsCache) {
+    this.#getPaths = accessFile;
     this.#fileCache = new Map();
     this.#partCache = new Map();
     this.#requestCache = new Map();
+    this.#fileContentsCache = fileContentsCache;
   }
 
   /**
@@ -71,10 +82,16 @@ export class PartLoader {
    * @param {string} fileName
    */
   async #loadFile(fileName) {
-    const contents = await this.#fetch(fileName);
+    const cachedContents = await this.#fileContentsCache?.get(fileName);
+
+    const contents = cachedContents ?? (await this.#fetch(fileName));
 
     if (contents == null) {
       return undefined;
+    }
+
+    if (!cachedContents) {
+      this.#fileContentsCache?.set(fileName, contents);
     }
 
     return new File(fileName, contents);
@@ -84,6 +101,21 @@ export class PartLoader {
    * @param {string} fileName
    */
   async #fetch(fileName) {
+    const cachedRequest = this.#requestCache.get(fileName);
+
+    if (cachedRequest) {
+      return cachedRequest;
+    }
+
+    const request = this.#getPaths(fileName, PartLoader.#paths(fileName));
+    this.#requestCache.set(fileName, request);
+    return request;
+  }
+
+  /**
+   * @param {string} fileName
+   */
+  static #paths(fileName) {
     let prefixes;
 
     if (fileName.startsWith("s\\")) {
@@ -98,21 +130,7 @@ export class PartLoader {
       (d) => `${d}/${fileName.replaceAll("\\", "/")}`
     );
 
-    const contents = await Promise.any(
-      options.map((path) => {
-        const cachedRequest = this.#requestCache.get(path);
-
-        if (cachedRequest) {
-          return cachedRequest;
-        }
-
-        const request = this.#accessFile(path);
-        this.#requestCache.set(path, request);
-        return request;
-      })
-    );
-
-    return contents ?? undefined;
+    return options;
   }
 }
 
@@ -226,7 +244,7 @@ export class Part {
 /**
  * @typedef {{
  *   color: number;
- *   transformation: import("./matrix.js").Matrix | undefined;
+ *   transformation: Matrix | undefined;
  *   invert: boolean;
  * }} RenderArgs
  */

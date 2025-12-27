@@ -1,19 +1,23 @@
 import { PartLoader } from "./ldraw.js";
+import { PartDb } from "./partdb.js";
 import { Renderer } from "./renderer.js";
 
 /**
- * @param {string} path
+ * @param {string} fileName
+ * @param {string[]} paths
  */
-async function fetchPart(path) {
-  const response = await fetch(path);
+async function fetchPart(fileName, paths) {
+  return Promise.any(
+    paths.map(async function (path) {
+      const response = await fetch(path);
 
-  if (!response.ok) {
-    return undefined;
-  }
+      if (!response.ok) {
+        throw new Error(`Could not load ${path}: ${response.status}`);
+      }
 
-  const contents = await response.text();
-
-  return contents;
+      return response.text();
+    })
+  );
 }
 
 /**
@@ -26,7 +30,9 @@ export async function initialize(canvas, form) {
   canvas.width = canvas.clientWidth * devicePixelRatio;
   canvas.height = canvas.clientHeight * devicePixelRatio;
 
-  const partLoader = new PartLoader(fetchPart);
+  const partDb = await PartDb.open();
+
+  const partLoader = new PartLoader(fetchPart, partDb);
 
   const part = await partLoader.load("3005.dat");
 
