@@ -86,46 +86,6 @@ export function orthographic(left, right, bottom, top, near, far) {
 }
 
 /**
- * @param {number} radians
- * @param {Matrix} matrix
- *
- * @returns {Matrix}
- */
-export function rotateX(radians, matrix) {
-  return multiply(matrix, fromRotationX(radians));
-}
-
-/**
- * @param {number} radians
- * @param {Matrix} matrix
- *
- * @returns {Matrix}
- */
-export function rotateY(radians, matrix) {
-  return multiply(matrix, fromRotationY(radians));
-}
-
-/**
- * @param {number} radians
- * @param {Matrix} matrix
- *
- * @returns {Matrix}
- */
-export function rotateZ(radians, matrix) {
-  return multiply(matrix, fromRotationZ(radians));
-}
-
-/**
- * @param {number | [number, number, number]} factor
- * @param {Matrix} matrix
- *
- * @returns {Matrix}
- */
-export function scale(factor, matrix) {
-  return multiply(matrix, fromScaling(factor));
-}
-
-/**
  * @param {number} moveX
  * @param {number} moveY
  * @param {number} moveZ
@@ -198,28 +158,6 @@ export function fromScaling(factor) {
     0,
     0,
     1,
-  ];
-}
-
-/**
- * @param {Matrix | undefined} matrix
- * @param {number[]} vector
- *
- * @returns {number[]}
- */
-export function apply(matrix, vector) {
-  if (!matrix) {
-    return vector;
-  }
-
-  const [u, v, w] = vector;
-
-  const [a, b, c, x, d, e, f, y, g, h, i, z] = matrix;
-
-  return [
-    a * u + b * v + c * w + x,
-    d * u + e * v + f * w + y,
-    g * u + h * v + i * w + z,
   ];
 }
 

@@ -1,4 +1,4 @@
-import { apply, determinant, identity, multiply } from "./matrix.js";
+import { determinant, identity, multiply } from "./matrix.js";
 
 export class PartLoader {
   /** @type {(fileName: string) => Promise<string | undefined>} */
@@ -88,7 +88,7 @@ export class PartLoader {
 
     if (fileName.startsWith("s\\")) {
       prefixes = ["ldraw/parts"];
-    } else if (fileName.startsWith("8\\")) {
+    } else if (fileName.startsWith("8\\") || fileName.startsWith("48\\")) {
       prefixes = ["ldraw/p"];
     } else {
       prefixes = ["ldraw/parts", "ldraw/p"];
@@ -98,22 +98,19 @@ export class PartLoader {
       (d) => `${d}/${fileName.replaceAll("\\", "/")}`
     );
 
-    const responses = await Promise.allSettled(
+    const contents = await Promise.any(
       options.map((path) => {
         const cachedRequest = this.#requestCache.get(path);
 
         if (cachedRequest) {
           return cachedRequest;
         }
+
         const request = this.#accessFile(path);
         this.#requestCache.set(path, request);
         return request;
       })
     );
-
-    const contents = responses
-      .filter((r) => r.status === "fulfilled")
-      .find((f) => f.value != null)?.value;
 
     return contents ?? undefined;
   }
@@ -132,20 +129,35 @@ export class Part {
 
   /**
    * @param {Partial<RenderArgs>} [args]
-   * @param {RenderResult} [accumulator]
-   *
-   * @returns {Record<GeometryType, Float32Array<ArrayBuffer>>}
    */
-  render(args, accumulator) {
+  render(args) {
     const renderArgs = {
       color: args?.color ?? 16,
       transformation: args?.transformation,
       invert: args?.invert ?? false,
     };
 
-    accumulator ??= EmptyRenderResult();
+    const { lines, optionalLines, triangles } = this.#render(
+      renderArgs,
+      EmptyRenderResult()
+    );
 
-    const { subFiles } = this.file.render(renderArgs, accumulator);
+    return {
+      lines: new Float32Array(lines),
+      optionalLines: new Float32Array(optionalLines),
+      triangles: new Float32Array(triangles),
+      ...this.#boundingBox(lines, triangles),
+    };
+  }
+
+  /**
+   * @param {RenderArgs} args
+   * @param {RenderResult} accumulator
+   *
+   * @returns {Record<GeometryType, number[]>}
+   */
+  #render(args, accumulator) {
+    const { subFiles } = this.file.render(args, accumulator);
 
     for (const subFile of subFiles) {
       const subPart = this.subParts.get(subFile.fileName);
@@ -154,33 +166,39 @@ export class Part {
         throw new Error(`Could not find subpart ${subFile}`);
       }
 
-      subPart.render(subFile, { ...accumulator, subFiles: [] });
+      accumulator.subFiles = [];
+      subPart.#render(subFile, accumulator);
     }
 
-    return {
-      lines: new Float32Array(accumulator.lines),
-      optionalLines: new Float32Array(accumulator.optionalLines),
-      triangles: new Float32Array(accumulator.triangles),
-    };
+    return accumulator;
   }
 
-  boundingBox() {
-    const { lines, triangles } = this.render();
+  /**
+   * @param {number[]} lines
+   * @param {number[]} triangles
+   */
+  #boundingBox(lines, triangles) {
+    /**
+     * @param {{ min: number[], max: number[] }} acc
+     * @param {number} point
+     * @param {number} index
+     */
+    function reducer(acc, point, index) {
+      // [x, y, z, x, y, z, x, y, z, ...]
+      const dimension = index % 3;
 
-    const { min, max } = [...lines, ...triangles].reduce(
-      function (acc, point, index) {
-        // [x, y, z, x, y, z, x, y, z, ...]
-        const dimension = index % 3;
+      acc.min[dimension] = Math.min(acc.min[dimension], point);
+      acc.max[dimension] = Math.max(acc.max[dimension], point);
 
-        acc.min[dimension] = Math.min(acc.min[dimension], point);
-        acc.max[dimension] = Math.max(acc.max[dimension], point);
+      return acc;
+    }
 
-        return acc;
-      },
-      {
+    const { min, max } = triangles.reduce(
+      reducer,
+      lines.reduce(reducer, {
         min: [Infinity, Infinity, Infinity],
         max: [-Infinity, -Infinity, -Infinity],
-      }
+      })
     );
 
     const center = [
@@ -189,8 +207,11 @@ export class Part {
       (min[2] + max[2]) / 2,
     ];
 
-    const extents = [max[0] - min[0], max[1] - min[1], max[2] - min[2]];
-    const largestExtent = Math.max(...extents);
+    const largestExtent = Math.max(
+      max[0] - min[0],
+      max[1] - min[1],
+      max[2] - min[2]
+    );
 
     return { min, max, largestExtent, center };
   }
@@ -233,15 +254,32 @@ export class File {
   constructor(name, contents) {
     this.name = name;
 
-    const commands = contents
-      .split("\n")
-      .map((line) => line.trim())
-      .filter(Boolean);
+    this.commands = [];
+    this.subFiles = [];
 
-    this.commands = [...File.getCommands(commands)];
-    this.subFiles = this.commands
-      .filter((c) => c instanceof DrawFile)
-      .map((c) => c.fileName);
+    const BFC_INVERTNEXT = /^0\s+BFC\s+INVERTNEXT/;
+
+    let invertNext = false;
+    for (const line of contents.split("\n")) {
+      const command = line.trim();
+
+      if (!command) {
+        continue;
+      }
+
+      let parsed;
+      if (BFC_INVERTNEXT.test(command)) {
+        invertNext = true;
+      } else if ((parsed = DrawCommand.from(command, invertNext))) {
+        invertNext = false;
+
+        this.commands.push(parsed);
+
+        if (parsed instanceof DrawFile) {
+          this.subFiles.push(parsed.fileName);
+        }
+      }
+    }
   }
 
   /**
@@ -258,26 +296,6 @@ export class File {
     }
 
     return accumulator;
-  }
-
-  /**
-   * @param {string[]} commands
-   */
-  static *getCommands(commands) {
-    const BFC_INVERTNEXT = /^0\s*BFC\s*INVERTNEXT/;
-
-    let invertNext = false;
-    let parsed;
-
-    for (const command of commands) {
-      if (BFC_INVERTNEXT.test(command)) {
-        invertNext = true;
-      } else if ((parsed = DrawCommand.from(command, invertNext))) {
-        invertNext = false;
-
-        yield parsed;
-      }
-    }
   }
 }
 
@@ -418,6 +436,7 @@ class DrawGeometry extends DrawCommand {
   constructor(color, coordinates, invert) {
     super(color, invert);
     this.coordinates = coordinates;
+    this.invertedCoordinates = coordinates.toReversed();
   }
 
   /**
@@ -429,20 +448,39 @@ class DrawGeometry extends DrawCommand {
   render({ transformation, invert }, accumulator) {
     accumulator ??= EmptyRenderResult();
 
-    const transformer = apply.bind(null, transformation);
-    const transformed = this.coordinates.map(transformer);
+    const coordinates = this.shouldInvert(invert)
+      ? this.invertedCoordinates
+      : this.coordinates;
 
-    if (this.shouldInvert(invert)) {
-      transformed.reverse();
+    // Extend geometry array once instead of multiple pushes
+    const geometry = accumulator[this.type];
+    const startIndex = geometry.length;
+    const pointCount = coordinates.length;
+    geometry.length = startIndex + pointCount * 3;
+
+    for (let i = 0; i < pointCount; i++) {
+      const [x, y, z] = coordinates[i];
+      const outOffset = startIndex + i * 3;
+
+      let transformedX = x;
+      let transformedY = y;
+      let transformedZ = z;
+
+      if (transformation) {
+        const [a, b, c, tx, d, e, f, ty, g, h, ii, tz] = transformation;
+        transformedX = a * x + b * y + c * z + tx;
+        transformedY = d * x + e * y + f * z + ty;
+        transformedZ = g * x + h * y + ii * z + tz;
+      }
+
+      /*
+       * Map an LDraw Coordinate (where -y is out of the page)
+       * to a GPU Coordinate (where -z is out of the page).
+       */
+      geometry[outOffset] = transformedX;
+      geometry[outOffset + 1] = transformedZ;
+      geometry[outOffset + 2] = transformedY;
     }
-
-    /*
-     * Map an LDraw Coordinate (where -y is out of the page)
-     * to a GPU Coordinate (where -z is out of the page).
-     */
-    const data = transformed.map(([x, y, z]) => [x, z, y]).flat();
-
-    accumulator[this.type].push(...data);
 
     return accumulator;
   }

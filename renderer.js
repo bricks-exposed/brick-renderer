@@ -192,9 +192,8 @@ export class Renderer {
       },
     });
 
-    const { lines, optionalLines, triangles } = part.render();
-
-    const { largestExtent, center } = part.boundingBox();
+    const { lines, optionalLines, triangles, largestExtent, center } =
+      part.render();
 
     this.viewBox = largestExtent / 2;
     this.center = center;
