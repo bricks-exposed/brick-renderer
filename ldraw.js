@@ -86,15 +86,10 @@ export class Part {
       })
     );
 
-    const zCenter = (min[2] + max[2]) / 2;
-
     const center = [
       (min[0] + max[0]) / 2,
       (min[1] + max[1]) / 2,
-      // Parts are usually centered slightly above the origin,
-      // whereas models are slightly below.
-      // We should center both visually.
-      zCenter < 0 ? zCenter : max[2] / 2,
+      (min[2] + max[2]) / 2,
     ];
 
     const largestExtent = Math.max(
