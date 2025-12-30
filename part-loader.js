@@ -121,12 +121,12 @@ export class PartLoader {
       prefixes = ["ldraw/parts"];
     } else if (fileName.startsWith("8\\") || fileName.startsWith("48\\")) {
       prefixes = ["ldraw/p"];
-    } else if (/^\d\d/.test(fileName)) {
+    } else if (/^\d\d\d/.test(fileName)) {
       prefixes = ["ldraw/parts"];
     } else if (/[.]ldr$/.test(fileName)) {
       prefixes = ["ldraw/models"];
     } else {
-      prefixes = ["ldraw/p"];
+      prefixes = ["ldraw/p", "ldraw/parts", "ldraw/models"];
     }
 
     const options = prefixes.map(
