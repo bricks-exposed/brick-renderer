@@ -131,6 +131,12 @@ const EmptyRenderResult = () => ({
   subFiles: [],
 });
 
+/**
+ * @typedef {{
+ *   invert: boolean;
+ * }} Context
+ */
+
 export class File {
   /**
    * @param {string} name
@@ -155,7 +161,7 @@ export class File {
       let parsed;
       if (BFC_INVERTNEXT.test(command)) {
         invertNext = true;
-      } else if ((parsed = DrawCommand.from(command, invertNext))) {
+      } else if ((parsed = DrawCommand.from(command, { invert: invertNext }))) {
         invertNext = false;
 
         this.commands.push(parsed);
@@ -197,9 +203,9 @@ const LineType = Object.freeze({
 class Command {
   /**
    * @param {string} command
-   * @param {boolean} invert
+   * @param {Readonly<Context>} context
    */
-  static from(command, invert) {
+  static from(command, context) {
     const [type] = command.split(/\s+/);
     const parsedType = Number.parseInt(type, 10);
 
@@ -209,7 +215,7 @@ class Command {
       return null;
     }
 
-    return constructor.from(command, invert);
+    return constructor.from(command, context);
   }
 }
 
@@ -217,12 +223,12 @@ class Command {
 class DrawCommand extends Command {
   /**
    * @param {number} color
-   * @param {boolean} invert
+   * @param {Readonly<Context>} context
    */
-  constructor(color, invert) {
+  constructor(color, context) {
     super();
     this.color = color;
-    this.invert = invert;
+    this.context = context;
   }
 
   /**
@@ -241,7 +247,7 @@ class DrawCommand extends Command {
    * @param {boolean} invert
    */
   shouldInvert(invert) {
-    return invert != this.invert;
+    return invert != this.context.invert;
   }
 }
 
@@ -249,10 +255,12 @@ class DrawFile extends DrawCommand {
   /**
    * @param {string} fileName
    * @param {RenderArgs} args
+   * @param {Readonly<Context>} context
    */
-  constructor(fileName, { color, transformation, invert }) {
-    super(color, invert);
+  constructor(fileName, { color, transformation, invert }, context) {
+    super(color, context);
     this.transformation = transformation ?? identity;
+    this.invert = invert;
     this.fileName = fileName;
   }
 
@@ -276,9 +284,9 @@ class DrawFile extends DrawCommand {
 
   /**
    * @param {string} command
-   * @param {boolean} parentInvert
+   * @param {Context} context
    */
-  static from(command, parentInvert) {
+  static from(command, context) {
     const [_type, color, ...tokens] = command.split(/\s+/);
 
     const [fileStart, ...fileRest] = tokens.splice(12);
@@ -301,11 +309,22 @@ class DrawFile extends DrawCommand {
 
     const [a, b, c, d, e, f, g, h, i] = abcdefghi;
 
-    return new DrawFile(fileName, {
-      color: Number.parseInt(color),
-      transformation: [a, b, c, x, d, e, f, y, g, h, i, z, 0, 0, 0, 1],
-      invert: inverted !== parentInvert,
-    });
+    return new DrawFile(
+      fileName,
+      {
+        color: Number.parseInt(color),
+        transformation: [a, b, c, x, d, e, f, y, g, h, i, z, 0, 0, 0, 1],
+        invert: inverted,
+      },
+      context
+    );
+  }
+
+  /**
+   * @param {boolean} invert
+   */
+  shouldInvert(invert) {
+    return super.shouldInvert(invert) !== this.invert;
   }
 }
 
@@ -316,10 +335,10 @@ class DrawGeometry extends DrawCommand {
   /**
    * @param {number} color
    * @param {number[][]} coordinates
-   * @param {boolean} invert
+   * @param {Readonly<Context>} context
    */
-  constructor(color, coordinates, invert) {
-    super(color, invert);
+  constructor(color, coordinates, context) {
+    super(color, context);
     this.coordinates = coordinates;
     this.invertedCoordinates = coordinates.toReversed();
   }
@@ -372,9 +391,9 @@ class DrawGeometry extends DrawCommand {
 
   /**
    * @param {string} command
-   * @param {boolean} invert
+   * @param {Readonly<Context>} context
    */
-  static from(command, invert) {
+  static from(command, context) {
     const [_type, color, ...points] = command
       .split(/\s+/)
       .map(Number.parseFloat);
@@ -384,7 +403,7 @@ class DrawGeometry extends DrawCommand {
       coordinates.push([points[i], points[i + 1], points[i + 2]]);
     }
 
-    return new this(color, coordinates, invert);
+    return new this(color, coordinates, context);
   }
 }
 
@@ -397,9 +416,9 @@ class DrawQuadrilateral extends DrawTriangle {
   /**
    * @param {number} color
    * @param {number[][]} coordinates
-   * @param {boolean} invert
+   * @param {Readonly<Context>} context
    */
-  constructor(color, coordinates, invert) {
+  constructor(color, coordinates, context) {
     /*
      * Convert LDraw's quadrilateral vertexes
      * to a vertex list that can draw triangles
@@ -412,7 +431,7 @@ class DrawQuadrilateral extends DrawTriangle {
      * 4 <-- 3
      */
     const [one, two, three, four] = coordinates;
-    super(color, [one, two, three, three, four, one], invert);
+    super(color, [one, two, three, three, four, one], context);
   }
 }
 
@@ -431,7 +450,7 @@ class DrawOptionalLine extends DrawLine {
   type = "optionalLines";
 }
 
-/** @type {Record<number, { from(command: string, invert: boolean): DrawCommand}>} */
+/** @type {Record<number, { from(command: string, context: Readonly<Context>): DrawCommand}>} */
 const CommandMap = {
   [LineType.DrawFile]: DrawFile,
   [LineType.DrawLine]: DrawLine,
