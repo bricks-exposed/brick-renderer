@@ -444,3 +444,56 @@ const CommandMap = {
   [LineType.DrawQuadrilateral]: DrawQuadrilateral,
   [LineType.DrawOptionalLine]: DrawOptionalLine,
 };
+
+export class Color {
+  /**
+   * @param {string} name
+   * @param {number} code
+   * @param {string} value
+   * @param {string} edge
+   */
+  constructor(name, code, value, edge) {
+    this.name = name;
+    this.code = code;
+    this.value = value;
+    this.edge = edge;
+  }
+
+  /**
+   * @param {string} command
+   */
+  static from(command) {
+    /*
+     * 0 !COLOUR <name>
+     * CODE <c, number>
+     * VALUE <v, hex>
+     * EDGE <e, hex>
+     * [ALPHA <a, 0-255>]
+     * [LUMINANCE <l>]
+     * [CHROME | PEARLESCENT | RUBBER | MATTE_METALLIC | METAL | MATERIAL <params>]
+     */
+    let [
+      _type,
+      _COLOUR,
+      name,
+      _CODE,
+      code,
+      _VALUE,
+      value,
+      _EDGE,
+      edge,
+      ...optional
+    ] = command.split(/\s+/);
+
+    const alphaParam = optional.findIndex((p) => p.toLowerCase() === "alpha");
+
+    if (alphaParam !== -1) {
+      const alpha = Number.parseInt(optional[alphaParam + 1], 10);
+      const alphaHex = alpha.toString(16);
+      value += alphaHex;
+      edge += alphaHex;
+    }
+
+    return new Color(name, Number.parseInt(code, 10), value, edge);
+  }
+}

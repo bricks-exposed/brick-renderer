@@ -1,6 +1,6 @@
 import { describe, it } from "node:test";
 import assert from "node:assert/strict";
-import { Part, File } from "./ldraw.js";
+import { Part, File, Color } from "./ldraw.js";
 
 describe("Part rendering", function () {
   it("should render basic edges", function () {
@@ -219,5 +219,27 @@ describe("Part rendering", function () {
       result.triangles,
       new Float32Array([0, 0, 1, -1, 0, 0, 0, 0, 0])
     );
+  });
+});
+
+describe("Colors", function () {
+  it("should parse a basic color", function () {
+    const parsed = Color.from(
+      "0 !COLOUR Black   CODE   0     VALUE #1B2A34   EDGE #2B4354"
+    );
+
+    assert.equal(parsed.name, "Black");
+    assert.equal(parsed.code, 0);
+    assert.equal(parsed.value, "#1B2A34");
+    assert.equal(parsed.edge, "#2B4354");
+  });
+
+  it("should parse a transparent color and apply the alpha", function () {
+    const parsed = Color.from(
+      "0 !COLOUR Transparent_Pink  CODE  45   VALUE #FC97AC   EDGE #F9345B   ALPHA 128"
+    );
+
+    assert.equal(parsed.value, "#FC97AC80");
+    assert.equal(parsed.edge, "#F9345B80");
   });
 });
