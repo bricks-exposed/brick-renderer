@@ -37,7 +37,7 @@ export async function initialize(canvas, form) {
 
   const configuration = await new ConfigurationLoader(fileLoader).load();
 
-  const partLoader = new PartLoader(fileLoader, configuration);
+  const partLoader = new PartLoader(fileLoader);
 
   const part = await partLoader.load("car.ldr");
 
@@ -45,7 +45,7 @@ export async function initialize(canvas, form) {
     throw new Error(`Part not found.`);
   }
 
-  const renderer = await Renderer.for(canvas, part);
+  const renderer = await Renderer.for(canvas, configuration.colors, part);
 
   let animationFrame = -1;
 

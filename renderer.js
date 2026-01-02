@@ -1,4 +1,4 @@
-import { Color, Part } from "./ldraw.js";
+import { Color, Colors, Part } from "./ldraw.js";
 import * as matrix from "./matrix.js";
 
 export class Renderer {
@@ -40,9 +40,10 @@ export class Renderer {
 
   /**
    * @param {HTMLCanvasElement} canvas
+   * @param {Colors} colors
    * @param {Part} part
    */
-  static async for(canvas, part) {
+  static async for(canvas, colors, part) {
     const context = canvas.getContext("webgpu");
     if (!context) {
       throw new Error("Could not get canvas webgpu context");
@@ -59,18 +60,20 @@ export class Renderer {
 
     context.configure({ device, format, alphaMode: "premultiplied" });
 
-    return new Renderer(device, format, context, part);
+    return new Renderer(device, format, context, colors, part);
   }
 
   /**
    * @param {GPUDevice} device
    * @param {GPUTextureFormat} format
    * @param {GPUCanvasContext} context
+   * @param {Colors} colors
    * @param {Part} part
    */
-  constructor(device, format, context, part) {
+  constructor(device, format, context, colors, part) {
     this.device = device;
     this.context = context;
+    this.colors = colors;
 
     this.colorBuffer = device.createBuffer({
       label: "Default color",
@@ -261,7 +264,7 @@ export class Renderer {
       optionalLines,
       viewBox,
       center,
-    } = Renderer.renderPart(part);
+    } = this.renderPart(part);
 
     this.viewBox = viewBox;
     this.center = center;
@@ -327,7 +330,7 @@ export class Renderer {
    * @param {Part} part
    * @returns
    */
-  static renderPart(part) {
+  renderPart(part) {
     const {
       lines: rawLines,
       triangles: rawTriangles,
@@ -356,7 +359,9 @@ export class Renderer {
       }
     }
 
-    for (const { vertices, color } of rawTriangles) {
+    for (const { vertices, color: colorCode } of rawTriangles) {
+      const color =
+        colorCode != null ? this.colors.for(colorCode)?.rgba : undefined;
       const array = color?.[3] === 255 ? opaqueTriangles : transparentTriangles;
       for (const vertex of vertices) {
         array.push(...vertex, ...(color ?? [-1, -1, -1, -1]));

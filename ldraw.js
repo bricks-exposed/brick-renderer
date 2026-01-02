@@ -110,13 +110,13 @@ export class Part {
 /**
  * @typedef {{
  *   lines: RenderLine[];
- *   triangles: { vertices: Triangle; color: Rgba | null }[];
+ *   triangles: { vertices: Triangle; color: number | null }[];
  * }} Geometry
  */
 
 /**
  * @typedef {{
- *   color?: Color | null | undefined;
+ *   color?: number | null | undefined;
  *   transformation?: Matrix | undefined;
  *   invert?: boolean;
  * }} RenderArgs
@@ -148,9 +148,8 @@ export class File {
   /**
    * @param {string} name
    * @param {string} contents
-   * @param {Colors} colors
    */
-  constructor(name, contents, colors) {
+  constructor(name, contents) {
     this.name = name;
 
     this.commands = [];
@@ -169,12 +168,7 @@ export class File {
       let parsed;
       if (BFC_INVERTNEXT.test(command)) {
         invertNext = true;
-      } else if (
-        (parsed = DrawCommand.from(command, {
-          invert: invertNext,
-          colors,
-        }))
-      ) {
+      } else if ((parsed = DrawCommand.from(command, invertNext))) {
         invertNext = false;
 
         this.commands.push(parsed);
@@ -219,32 +213,28 @@ const LineType = Object.freeze({
 class Command {
   /**
    * @param {string} command
-   * @param {Readonly<Context>} context
+   * @param {boolean} invert
    */
-  static from(command, context) {
+  static from(command, invert) {
     const [type] = command.split(/\s+/);
     const parsedType = Number.parseInt(type, 10);
 
     const constructor = CommandMap[parsedType];
 
-    if (!constructor) {
-      return null;
-    }
-
-    return constructor.from(command, context);
+    return constructor?.from(command, invert) ?? null;
   }
 }
 
 /** @abstract */
 class DrawCommand extends Command {
   /**
-   * @param {Color | null} color
-   * @param {Readonly<Context>} context
+   * @param {number | null} color
+   * @param {boolean} invert
    */
-  constructor(color, context) {
+  constructor(color, invert) {
     super();
-    this.color = color;
-    this.context = context;
+    this.color = color === Color.CURRENT_COLOR ? null : color;
+    this.invertedByParent = invert;
   }
 
   /**
@@ -263,22 +253,22 @@ class DrawCommand extends Command {
    * @param {boolean} invert
    */
   shouldInvert(invert = false) {
-    return invert != this.context.invert;
+    return invert != this.invertedByParent;
   }
 }
 
 class DrawFile extends DrawCommand {
   /**
    * @param {string} fileName
-   * @param {Color | null} color
+   * @param {number | null} color
    * @param {Matrix | undefined} transformation
-   * @param {boolean} invert
-   * @param {Readonly<Context>} context
+   * @param {boolean} invertSelf
+   * @param {boolean} parentInvert
    */
-  constructor(fileName, color, transformation, invert, context) {
-    super(color, context);
+  constructor(fileName, color, transformation, invertSelf, parentInvert) {
+    super(color, parentInvert);
     this.transformation = transformation ?? identity;
-    this.invert = invert;
+    this.invertSelf = invertSelf;
     this.fileName = fileName;
   }
 
@@ -302,12 +292,12 @@ class DrawFile extends DrawCommand {
 
   /**
    * @param {string} command
-   * @param {Context} context
+   * @param {boolean} parentInvert
    */
-  static from(command, context) {
-    const [_type, colorCode, ...tokens] = command.split(/\s+/);
+  static from(command, parentInvert) {
+    const [_type, unparsedColor, ...tokens] = command.split(/\s+/);
 
-    const color = context.colors.for(colorCode);
+    const color = Number.parseInt(unparsedColor);
 
     const [fileStart, ...fileRest] = tokens.splice(12);
 
@@ -334,7 +324,7 @@ class DrawFile extends DrawCommand {
       color,
       [a, b, c, x, d, e, f, y, g, h, i, z, 0, 0, 0, 1],
       inverted,
-      context
+      parentInvert
     );
   }
 
@@ -342,19 +332,19 @@ class DrawFile extends DrawCommand {
    * @param {boolean} invert
    */
   shouldInvert(invert = false) {
-    return super.shouldInvert(invert) !== this.invert;
+    return super.shouldInvert(invert) !== this.invertSelf;
   }
 }
 
 /** @abstract */
 class DrawGeometry extends DrawCommand {
   /**
-   * @param {Color | null} color
+   * @param {number | null} color
    * @param {Coordinate[]} coordinates
-   * @param {Readonly<Context>} context
+   * @param {boolean} invert
    */
-  constructor(color, coordinates, context) {
-    super(color, context);
+  constructor(color, coordinates, invert) {
+    super(color, invert);
 
     if (new.target === DrawGeometry) {
       throw new Error(
@@ -365,14 +355,12 @@ class DrawGeometry extends DrawCommand {
 
   /**
    * @param {string} command
-   * @param {Readonly<Context>} context
+   * @param {boolean} invert
    */
-  static from(command, context) {
-    const [_type, colorCode, ...points] = command
+  static from(command, invert) {
+    const [_type, color, ...points] = command
       .split(/\s+/)
       .map(Number.parseFloat);
-
-    const color = context.colors.for(colorCode);
 
     /** @type {Coordinate[]} */
     const coordinates = [];
@@ -380,7 +368,7 @@ class DrawGeometry extends DrawCommand {
       coordinates.push([points[i], points[i + 1], points[i + 2]]);
     }
 
-    return new this(color, coordinates, context);
+    return new this(color, coordinates, invert);
   }
 
   /**
@@ -432,12 +420,12 @@ class DrawTriangle extends DrawGeometry {
   invertedTriangles;
 
   /**
-   * @param {Color | null} color
+   * @param {number} color
    * @param {Coordinate[]} coordinates
-   * @param {Readonly<Context>} context
+   * @param {boolean} invert
    */
-  constructor(color, coordinates, context) {
-    super(color, coordinates, context);
+  constructor(color, coordinates, invert) {
+    super(color, coordinates, invert);
 
     this.triangles = [];
     this.invertedTriangles = [];
@@ -465,8 +453,6 @@ class DrawTriangle extends DrawGeometry {
   render({ color, transformation, invert }, accumulator) {
     accumulator ??= EmptyRenderResult();
 
-    const rgba = this.rgba(color);
-
     const geometry = accumulator.triangles;
 
     const triangles = this.shouldInvert(invert)
@@ -476,18 +462,11 @@ class DrawTriangle extends DrawGeometry {
     for (const triangle of triangles) {
       geometry.push({
         vertices: DrawTriangle.transformTriangle(transformation, triangle),
-        color: rgba,
+        color: this.color ?? color ?? null,
       });
     }
 
     return accumulator;
-  }
-
-  /**
-   * @param {Color | null | undefined} color
-   */
-  rgba(color) {
-    return this.color?.rgba ?? color?.rgba ?? null;
   }
 
   /**
@@ -503,11 +482,11 @@ class DrawTriangle extends DrawGeometry {
 
 class DrawQuadrilateral extends DrawTriangle {
   /**
-   * @param {Color} color
+   * @param {number} color
    * @param {Coordinate[]} coordinates
-   * @param {Readonly<Context>} context
+   * @param {boolean} invert
    */
-  constructor(color, coordinates, context) {
+  constructor(color, coordinates, invert) {
     /*
      * Convert LDraw's quadrilateral vertexes
      * to a vertex list that can draw triangles
@@ -520,7 +499,7 @@ class DrawQuadrilateral extends DrawTriangle {
      * 4 <-- 3
      */
     const [one, two, three, four] = coordinates;
-    super(color, [one, two, three, three, four, one], context);
+    super(color, [one, two, three, three, four, one], invert);
   }
 }
 
@@ -532,12 +511,12 @@ class DrawLine extends DrawGeometry {
   controlPoints;
 
   /**
-   * @param {Color | null} color
+   * @param {number} _color
    * @param {Coordinate[]} coordinates
-   * @param {Readonly<Context>} context
+   * @param {boolean} _invert
    */
-  constructor(color, coordinates, context) {
-    super(null, coordinates, context);
+  constructor(_color, coordinates, _invert) {
+    super(Color.EDGE_COLOR, coordinates, false);
     const [first, second, control1, control2] = coordinates;
     this.coordinates = [first, second];
     this.controlPoints = control1 ? [control1, control2] : undefined;
@@ -574,7 +553,7 @@ class DrawLine extends DrawGeometry {
   }
 }
 
-/** @type {Record<number, { from(command: string, context: Readonly<Context>): DrawCommand}>} */
+/** @type {Record<number, { from(command: string, invert: boolean): DrawCommand}>} */
 const CommandMap = {
   [LineType.DrawFile]: DrawFile,
   [LineType.DrawLine]: DrawLine,

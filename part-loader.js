@@ -94,15 +94,11 @@ export class PartLoader {
   /** @type {Map<string, Promise<Part>>} */
   #partCache = new Map();
 
-  #configuration;
-
   /**
    * @param {FileLoader} fileLoader
-   * @param {Configuration} configuration
    */
-  constructor(fileLoader, configuration) {
+  constructor(fileLoader) {
     this.#fileLoader = fileLoader;
-    this.#configuration = configuration;
   }
 
   /**
@@ -142,7 +138,7 @@ export class PartLoader {
     }
 
     if (typeof file === "string") {
-      file = new File(fileName, file, this.#configuration.colors);
+      file = new File(fileName, file);
 
       this.#fileCache.set(fileName, file);
     }

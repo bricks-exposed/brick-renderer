@@ -7,7 +7,7 @@ const Test_Colors = new Colors([Color.custom("#000000")]);
 
 describe("Part rendering", function () {
   it("should render basic lines", function () {
-    const file = new File("test.dat", "2 24 1 0 0 1 1 0", Test_Colors);
+    const file = new File("test.dat", "2 24 1 0 0 1 1 0");
 
     const { lines } = file.render();
 
@@ -23,11 +23,7 @@ describe("Part rendering", function () {
   });
 
   it("should render optional lines", function () {
-    const file = new File(
-      "test.dat",
-      "5 24 1 0 0 1 1 0 0.9 0 0.4 0.9 0 -0.4",
-      Test_Colors
-    );
+    const file = new File("test.dat", "5 24 1 0 0 1 1 0 0.9 0 0.4 0.9 0 -0.4");
 
     const { lines } = file.render();
 
@@ -65,12 +61,48 @@ describe("Part rendering", function () {
     ]);
   });
 
+  it("should render triangles with a color with code 0", function () {
+    const file = new File("triangle.dat", "3 0 0 0 0 1 0 0 0 1 0");
+
+    const { lines, triangles } = file.render();
+
+    assert.equal(lines.length, 0);
+    // Triangle vertices: (0,0,0), (1,0,0), (0,1,0)
+    // Mapped to GPU [x,z,y]: (0,0,0), (1,0,0), (0,0,1)
+    assert.deepEqual(triangles, [
+      {
+        vertices: [
+          [0, 0, 0],
+          [1, 0, 0],
+          [0, 0, 1],
+        ],
+        color: 0,
+      },
+    ]);
+  });
+
+  it("should render triangles with a color with nonzero code", function () {
+    const file = new File("triangle.dat", "3 5 0 0 0 1 0 0 0 1 0");
+
+    const { lines, triangles } = file.render();
+
+    assert.equal(lines.length, 0);
+    // Triangle vertices: (0,0,0), (1,0,0), (0,1,0)
+    // Mapped to GPU [x,z,y]: (0,0,0), (1,0,0), (0,0,1)
+    assert.deepEqual(triangles, [
+      {
+        vertices: [
+          [0, 0, 0],
+          [1, 0, 0],
+          [0, 0, 1],
+        ],
+        color: 5,
+      },
+    ]);
+  });
+
   it("should render quadrilaterals as two triangles", function () {
-    const file = new File(
-      "quad.dat",
-      "4 16 0 0 0 1 0 0 1 1 0 0 1 0",
-      Test_Colors
-    );
+    const file = new File("quad.dat", "4 16 0 0 0 1 0 0 1 1 0 0 1 0");
 
     const { triangles } = file.render();
 
@@ -99,7 +131,7 @@ describe("Part rendering", function () {
   });
 
   it("should apply transformations", function () {
-    const file = new File("test.dat", "3 16 1 0 0 2 0 0 1 1 0", Test_Colors);
+    const file = new File("test.dat", "3 16 1 0 0 2 0 0 1 1 0");
 
     const { triangles } = file.render({ transformation: fromScaling(2) });
 
@@ -119,7 +151,7 @@ describe("Part rendering", function () {
   });
 
   it("should handle inversion", function () {
-    const file = new File("test.dat", "3 16 0 0 0 1 0 0 0 1 0", Test_Colors);
+    const file = new File("test.dat", "3 16 0 0 0 1 0 0 0 1 0");
 
     const inverted = file.render({ invert: true });
 
@@ -137,17 +169,12 @@ describe("Part rendering", function () {
   });
 
   it("should render subparts with transformations", function () {
-    const childFile = new File(
-      "child.dat",
-      "3 16 0 0 0 1 0 0 0 1 0",
-      Test_Colors
-    );
+    const childFile = new File("child.dat", "3 16 0 0 0 1 0 0 0 1 0");
     const childPart = new Part(childFile, []);
 
     const parentFile = new File(
       "parent.dat",
-      "1 16 10 0 0 1 0 0 0 1 0 0 0 1 child.dat",
-      Test_Colors
+      "1 16 10 0 0 1 0 0 0 1 0 0 0 1 child.dat"
     );
     const parentPart = new Part(parentFile, [childPart]);
 
@@ -170,11 +197,7 @@ describe("Part rendering", function () {
   });
 
   it("should handle BFC INVERTNEXT", function () {
-    const childFile = new File(
-      "child.dat",
-      "3 16 0 0 0 1 0 0 0 1 0",
-      Test_Colors
-    );
+    const childFile = new File("child.dat", "3 16 0 0 0 1 0 0 0 1 0");
     const childPart = new Part(childFile, []);
 
     const parentFile = new File(
@@ -182,8 +205,7 @@ describe("Part rendering", function () {
       `
       0 BFC INVERTNEXT
       1 16 0 0 0 1 0 0 0 1 0 0 0 1 child.dat
-    `,
-      Test_Colors
+    `
     );
     const parentPart = new Part(parentFile, [childPart]);
 
@@ -203,17 +225,12 @@ describe("Part rendering", function () {
   });
 
   it("should detect negative determinant as inverted", function () {
-    const childFile = new File(
-      "child.dat",
-      "3 16 0 0 0 1 0 0 0 1 0",
-      Test_Colors
-    );
+    const childFile = new File("child.dat", "3 16 0 0 0 1 0 0 0 1 0");
     const childPart = new Part(childFile, []);
 
     const parentFile = new File(
       "parent.dat",
-      "1 16 0 0 0 -1 0 0 0 1 0 0 0 1 child.dat",
-      Test_Colors
+      "1 16 0 0 0 -1 0 0 0 1 0 0 0 1 child.dat"
     );
     const parentPart = new Part(parentFile, [childPart]);
 
