@@ -1,19 +1,7 @@
-import { Part } from "./ldraw.js";
+import { Color, Part } from "./ldraw.js";
 import * as matrix from "./matrix.js";
 
 export class Renderer {
-  /** @readonly @type {GPUVertexBufferLayout} */
-  static #bufferLayout = {
-    arrayStride: 3 * 4,
-    attributes: [
-      {
-        format: "float32x3",
-        offset: 0,
-        shaderLocation: 0,
-      },
-    ],
-  };
-
   /** @readonly @type {GPUVertexBufferLayout} */
   static #optionalLineBufferLayout = {
     // Instance buffer: 4 vec3f points (p1, p2, c1, c2) = 12 floats
@@ -84,6 +72,12 @@ export class Renderer {
     this.device = device;
     this.context = context;
 
+    this.colorBuffer = device.createBuffer({
+      label: "Default color",
+      size: 4 * 4,
+      usage: GPUBufferUsage.COPY_DST | GPUBufferUsage.UNIFORM,
+    });
+
     this.uniformBuffer = device.createBuffer({
       label: "Rotation matrix",
       size: 16 * 4,
@@ -91,7 +85,7 @@ export class Renderer {
     });
 
     const bindGroupLayout = device.createBindGroupLayout({
-      label: "Rotation uniform bind group layout",
+      label: "Rotation and color uniform bind group layout",
       entries: [
         {
           binding: 0,
@@ -99,6 +93,11 @@ export class Renderer {
             GPUShaderStage.VERTEX |
             GPUShaderStage.FRAGMENT |
             GPUShaderStage.COMPUTE,
+          buffer: { type: "uniform" },
+        },
+        {
+          binding: 1,
+          visibility: GPUShaderStage.FRAGMENT | GPUShaderStage.COMPUTE,
           buffer: { type: "uniform" },
         },
       ],
@@ -111,6 +110,10 @@ export class Renderer {
         {
           binding: 0,
           resource: { buffer: this.uniformBuffer },
+        },
+        {
+          binding: 1,
+          resource: { buffer: this.colorBuffer },
         },
       ],
     });
@@ -133,7 +136,18 @@ export class Renderer {
       vertex: {
         module: edgeShaderModule,
         entryPoint: "vertexMain",
-        buffers: [Renderer.#bufferLayout],
+        buffers: [
+          {
+            arrayStride: 3 * 4,
+            attributes: [
+              {
+                format: "float32x3",
+                offset: 0,
+                shaderLocation: 0,
+              },
+            ],
+          },
+        ],
       },
       fragment: {
         module: edgeShaderModule,
@@ -147,8 +161,8 @@ export class Renderer {
       code: TRIANGLE_SHADER,
     });
 
-    const trianglePipeline = device.createRenderPipeline({
-      label: "Triangle pipeline",
+    /** @satisfies {GPURenderPipelineDescriptor} */
+    const trianglePipelineDescriptor = {
       layout: pipelineLayout,
       primitive: { cullMode: "back" },
       depthStencil: {
@@ -161,12 +175,60 @@ export class Renderer {
       vertex: {
         module: triangleShaderModule,
         entryPoint: "vertexMain",
-        buffers: [Renderer.#bufferLayout],
+        buffers: [
+          {
+            arrayStride: 7 * 4,
+            attributes: [
+              {
+                format: "float32x3",
+                offset: 0,
+                shaderLocation: 0,
+              },
+              {
+                format: "float32x4",
+                offset: 3 * 4,
+                shaderLocation: 1,
+              },
+            ],
+          },
+        ],
       },
       fragment: {
         module: triangleShaderModule,
         entryPoint: "fragmentMain",
-        targets: [{ format }],
+        targets: [
+          {
+            format,
+            blend: {
+              color: {
+                operation: "add",
+                srcFactor: "one",
+                dstFactor: "one-minus-src-alpha",
+              },
+              alpha: {
+                operation: "add",
+                srcFactor: "one",
+                dstFactor: "one-minus-src-alpha",
+              },
+            },
+          },
+        ],
+      },
+    };
+
+    const opaqueTriangePipeline = device.createRenderPipeline({
+      ...trianglePipelineDescriptor,
+      label: "Opaque triangle render pipeline",
+    });
+
+    const transparentTriangePipeline = device.createRenderPipeline({
+      ...trianglePipelineDescriptor,
+      label: "Transparent triangle pipeline",
+      depthStencil: {
+        ...trianglePipelineDescriptor.depthStencil,
+
+        // Transparent triangles shouldn't block other triangles
+        depthWriteEnabled: false,
       },
     });
 
@@ -192,8 +254,14 @@ export class Renderer {
       },
     });
 
-    const { lines, optionalLines, triangles, largestExtent, center } =
-      part.render();
+    const {
+      lines,
+      optionalLines,
+      opaqueTriangles,
+      transparentTriangles,
+      largestExtent,
+      center,
+    } = part.render();
 
     this.viewBox = largestExtent / 2;
     this.center = center;
@@ -209,15 +277,34 @@ export class Renderer {
       pipeline: edgePipeline,
     };
 
-    const triangleVertexBuffer = this.device.createBuffer({
-      size: triangles.byteLength,
+    const opaqueTriangleVertexBuffer = this.device.createBuffer({
+      size: opaqueTriangles.byteLength,
       usage: GPUBufferUsage.COPY_DST | GPUBufferUsage.VERTEX,
     });
-    this.device.queue.writeBuffer(triangleVertexBuffer, 0, triangles);
-    this.triangleRender = {
-      count: triangles.length / 3,
-      vertexBuffer: triangleVertexBuffer,
-      pipeline: trianglePipeline,
+    this.device.queue.writeBuffer(
+      opaqueTriangleVertexBuffer,
+      0,
+      opaqueTriangles
+    );
+    this.opaqueTriangleRender = {
+      count: opaqueTriangles.length / 7,
+      vertexBuffer: opaqueTriangleVertexBuffer,
+      pipeline: opaqueTriangePipeline,
+    };
+
+    const transparentTriangleVertexBuffer = this.device.createBuffer({
+      size: transparentTriangles.byteLength,
+      usage: GPUBufferUsage.COPY_DST | GPUBufferUsage.VERTEX,
+    });
+    this.device.queue.writeBuffer(
+      transparentTriangleVertexBuffer,
+      0,
+      transparentTriangles
+    );
+    this.transparentTriangleRender = {
+      count: transparentTriangles.length / 7,
+      vertexBuffer: transparentTriangleVertexBuffer,
+      pipeline: transparentTriangePipeline,
     };
 
     this.optionalLineRender = {
@@ -237,11 +324,18 @@ export class Renderer {
   }
 
   /**
+   * @param {Color} color
    * @param {Transform} transform
    */
-  render(transform) {
+  render(color, transform) {
     const transformMatrix = this.#transformMatrix(transform);
     this.device.queue.writeBuffer(this.uniformBuffer, 0, transformMatrix);
+
+    this.device.queue.writeBuffer(
+      this.colorBuffer,
+      0,
+      new Float32Array(color.rgba)
+    );
 
     const encoder = this.device.createCommandEncoder();
 
@@ -260,6 +354,7 @@ export class Renderer {
           view: canvasTextureView,
           loadOp: "clear",
           storeOp: "store",
+          // clearValue: { r: 0.302, g: 0.427, b: 0.878, a: 1 },
         },
       ],
       depthStencilAttachment: {
@@ -272,18 +367,26 @@ export class Renderer {
 
     pass.setBindGroup(0, this.bindGroup);
 
+    if (this.opaqueTriangleRender.count > 0) {
+      pass.setPipeline(this.opaqueTriangleRender.pipeline);
+      pass.setVertexBuffer(0, this.opaqueTriangleRender.vertexBuffer);
+      pass.draw(this.opaqueTriangleRender.count);
+    }
+
     pass.setPipeline(this.edgeRender.pipeline);
     pass.setVertexBuffer(0, this.edgeRender.vertexBuffer);
     pass.draw(this.edgeRender.count);
-
-    pass.setPipeline(this.triangleRender.pipeline);
-    pass.setVertexBuffer(0, this.triangleRender.vertexBuffer);
-    pass.draw(this.triangleRender.count);
 
     // Render optional lines
     pass.setPipeline(this.optionalLineRender.pipeline);
     pass.setVertexBuffer(0, this.optionalLineRender.vertexBuffer);
     pass.draw(2, this.optionalLineRender.count);
+
+    if (this.transparentTriangleRender.count > 0) {
+      pass.setPipeline(this.transparentTriangleRender.pipeline);
+      pass.setVertexBuffer(0, this.transparentTriangleRender.vertexBuffer);
+      pass.draw(this.transparentTriangleRender.count);
+    }
 
     pass.end();
 
@@ -351,6 +454,8 @@ const EDGE_SHADER = `
 
   @group(0) @binding(0) var<uniform> rotationMatrix: mat4x4f;
 
+  @group(0) @binding(1) var<uniform> defaultColor: vec4f;
+
   @vertex
   fn vertexMain(input: VertexInput) -> VertexOutput {
     var output: VertexOutput;
@@ -360,7 +465,7 @@ const EDGE_SHADER = `
 
   @fragment
   fn fragmentMain() -> @location(0) vec4f {
-    return vec4(1.0, 1.0, 1.0, 1.0);
+    return vec4(0.0, 0.0, 0.0, 1.0);
   }
   `;
 
@@ -430,30 +535,41 @@ const OPTIONAL_LINE_SHADER = `
     if (input.shouldDiscard < 0.5) {
       discard;
     }
-    return vec4f(1.0, 1.0, 1.0, 1.0);
+    return vec4f(0.0, 0.0, 0.0, 1.0);
   }
 `;
 
 const TRIANGLE_SHADER = `
   struct VertexInput {
     @location(0) position: vec4f,
+    @location(1) color: vec4f,
   }
 
   struct VertexOutput {
     @builtin(position) position: vec4f,
+    @location(0) color: vec4f,
   }
 
   @group(0) @binding(0) var<uniform> rotationMatrix: mat4x4f;
+
+  @group(0) @binding(1) var<uniform> defaultColor: vec4f;
 
   @vertex
   fn vertexMain(input: VertexInput) -> VertexOutput {
     var output: VertexOutput;
     output.position = rotationMatrix * input.position;
+    output.color = input.color;
     return output;
   }
 
   @fragment
-  fn fragmentMain() -> @location(0) vec4f {
-    return vec4(0.86, 0.42, 0.32, 1.0);
+  fn fragmentMain(input: VertexOutput) -> @location(0) vec4f {
+    var color = select(
+      input.color,
+      defaultColor,
+      all(input.color.xyz == vec3(-1.0, -1.0, -1.0)))
+      / 255;
+
+    return color * color.w;
   }
   `;

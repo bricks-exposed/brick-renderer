@@ -1,4 +1,4 @@
-import { Part, File } from "./ldraw.js";
+import { Part, File, Configuration } from "./ldraw.js";
 
 /**
  * @typedef {{
@@ -7,19 +7,13 @@ import { Part, File } from "./ldraw.js";
  * }} FileContentsCache
  */
 
-export class PartLoader {
+export class FileLoader {
   #getPaths;
 
-  /** @type {Map<string, Promise<string | undefined>>} */
-  #requestCache;
-
-  /** @type {Map<string, File>} */
-  #fileCache;
-
-  /** @type {Map<string, Promise<Part>>} */
-  #partCache;
-
   #fileContentsCache;
+
+  /** @type {Map<string, Promise<string | undefined>>} */
+  #requestCache = new Map();
 
   /**
    * @param {(fileName: string, paths: string[]) => Promise<string | undefined>} accessFile
@@ -27,10 +21,88 @@ export class PartLoader {
    */
   constructor(accessFile, fileContentsCache) {
     this.#getPaths = accessFile;
-    this.#fileCache = new Map();
-    this.#partCache = new Map();
-    this.#requestCache = new Map();
     this.#fileContentsCache = fileContentsCache;
+  }
+
+  /**
+   * @param {string} fileName
+   * @param {string[]} [paths]
+   */
+  async load(fileName, paths) {
+    const cachedContents = await this.#fileContentsCache?.get(fileName);
+
+    const contents = cachedContents ?? (await this.#fetch(fileName, paths));
+
+    if (contents == null) {
+      return undefined;
+    }
+
+    if (!cachedContents) {
+      this.#fileContentsCache?.set(fileName, contents);
+    }
+
+    return contents;
+  }
+
+  /**
+   * @param {string} fileName
+   * @param {string[]} [directories]
+   */
+  async #fetch(fileName, directories = ["ldraw"]) {
+    const cachedRequest = this.#requestCache.get(fileName);
+
+    if (cachedRequest) {
+      return cachedRequest;
+    }
+
+    const request = this.#getPaths(
+      fileName,
+      directories.map((d) => `${d}/${fileName.replaceAll("\\", "/")}`)
+    );
+    this.#requestCache.set(fileName, request);
+    return request;
+  }
+}
+
+export class ConfigurationLoader {
+  #fileLoader;
+
+  /**
+   * @param {FileLoader} fileLoader
+   */
+  constructor(fileLoader) {
+    this.#fileLoader = fileLoader;
+  }
+
+  async load(fileName = "LDCfgalt.ldr") {
+    const fileContents = await this.#fileLoader.load(fileName);
+
+    if (!fileContents) {
+      throw new Error(`Could not find config file ${fileName}`);
+    }
+
+    return Configuration.from(fileContents);
+  }
+}
+
+export class PartLoader {
+  #fileLoader;
+
+  /** @type {Map<string, File>} */
+  #fileCache = new Map();
+
+  /** @type {Map<string, Promise<Part>>} */
+  #partCache = new Map();
+
+  #configuration;
+
+  /**
+   * @param {FileLoader} fileLoader
+   * @param {Configuration} configuration
+   */
+  constructor(fileLoader, configuration) {
+    this.#fileLoader = fileLoader;
+    this.#configuration = configuration;
   }
 
   /**
@@ -61,14 +133,19 @@ export class PartLoader {
    * @returns {Promise<Part>}
    */
   async #loadPart(fileName) {
-    const file =
-      this.#fileCache.get(fileName) ?? (await this.#loadFile(fileName));
+    let file =
+      this.#fileCache.get(fileName) ??
+      (await this.#fileLoader.load(fileName, PartLoader.#paths(fileName)));
 
     if (!file) {
       throw new Error(`Could not find file for ${fileName}`);
     }
 
-    this.#fileCache.set(fileName, file);
+    if (typeof file === "string") {
+      file = new File(fileName, file, this.#configuration.colors);
+
+      this.#fileCache.set(fileName, file);
+    }
 
     const subParts = await Promise.all(
       file.subFiles.map((subFile) => this.load(subFile))
@@ -80,59 +157,17 @@ export class PartLoader {
   /**
    * @param {string} fileName
    */
-  async #loadFile(fileName) {
-    const cachedContents = await this.#fileContentsCache?.get(fileName);
-
-    const contents = cachedContents ?? (await this.#fetch(fileName));
-
-    if (contents == null) {
-      return undefined;
-    }
-
-    if (!cachedContents) {
-      this.#fileContentsCache?.set(fileName, contents);
-    }
-
-    return new File(fileName, contents);
-  }
-
-  /**
-   * @param {string} fileName
-   */
-  async #fetch(fileName) {
-    const cachedRequest = this.#requestCache.get(fileName);
-
-    if (cachedRequest) {
-      return cachedRequest;
-    }
-
-    const request = this.#getPaths(fileName, PartLoader.#paths(fileName));
-    this.#requestCache.set(fileName, request);
-    return request;
-  }
-
-  /**
-   * @param {string} fileName
-   */
   static #paths(fileName) {
-    let prefixes;
-
     if (fileName.startsWith("s\\")) {
-      prefixes = ["ldraw/parts"];
+      return ["ldraw/parts"];
     } else if (fileName.startsWith("8\\") || fileName.startsWith("48\\")) {
-      prefixes = ["ldraw/p"];
+      return ["ldraw/p"];
     } else if (/^\d\d\d/.test(fileName)) {
-      prefixes = ["ldraw/parts"];
+      return ["ldraw/parts"];
     } else if (/[.]ldr$/.test(fileName)) {
-      prefixes = ["ldraw/models"];
+      return ["ldraw/models"];
     } else {
-      prefixes = ["ldraw/p", "ldraw/parts", "ldraw/models"];
+      return ["ldraw/p", "ldraw/parts", "ldraw/models"];
     }
-
-    const options = prefixes.map(
-      (d) => `${d}/${fileName.replaceAll("\\", "/")}`
-    );
-
-    return options;
   }
 }

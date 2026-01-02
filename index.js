@@ -1,6 +1,7 @@
-import { PartLoader } from "./part-loader.js";
+import { ConfigurationLoader, FileLoader, PartLoader } from "./part-loader.js";
 import { PartDb } from "./part-db.js";
 import { Renderer } from "./renderer.js";
+import { Color } from "./ldraw.js";
 
 /**
  * @param {string} fileName
@@ -32,9 +33,13 @@ export async function initialize(canvas, form) {
 
   const partDb = await PartDb.open();
 
-  const partLoader = new PartLoader(fetchPart, partDb);
+  const fileLoader = new FileLoader(fetchPart, partDb);
 
-  const part = await partLoader.load("3005.dat");
+  const configuration = await new ConfigurationLoader(fileLoader).load();
+
+  const partLoader = new PartLoader(fileLoader, configuration);
+
+  const part = await partLoader.load("car.ldr");
 
   if (!part) {
     throw new Error(`Part not found.`);
@@ -62,7 +67,9 @@ export async function initialize(canvas, form) {
         scale,
       };
 
-      renderer.render(transforms);
+      const color = Color.custom(data.get("color")?.toString() ?? "#e04d4d");
+
+      renderer.render(color, transforms);
     });
   }
 

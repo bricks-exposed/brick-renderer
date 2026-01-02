@@ -17,21 +17,20 @@ export class Part {
    */
   render(args) {
     const renderArgs = {
-      color: args?.color ?? 16,
+      color: args?.color ?? null,
       transformation: args?.transformation,
       invert: args?.invert ?? false,
     };
 
-    const { lines, optionalLines, triangles } = this.#render(
-      renderArgs,
-      EmptyRenderResult()
-    );
+    const { lines, optionalLines, opaqueTriangles, transparentTriangles } =
+      this.#render(renderArgs, EmptyRenderResult());
 
     return {
       lines: new Float32Array(lines),
       optionalLines: new Float32Array(optionalLines),
-      triangles: new Float32Array(triangles),
-      ...this.#boundingBox(lines, triangles),
+      opaqueTriangles: new Float32Array(opaqueTriangles),
+      transparentTriangles: new Float32Array(transparentTriangles),
+      ...this.#boundingBox(lines, opaqueTriangles, transparentTriangles),
     };
   }
 
@@ -60,31 +59,79 @@ export class Part {
 
   /**
    * @param {number[]} lines
-   * @param {number[]} triangles
+   * @param {number[]} opaqueTriangles
+   * @param {number[]} transparentTriangles
    */
-  #boundingBox(lines, triangles) {
+  #boundingBox(lines, opaqueTriangles, transparentTriangles) {
     /**
      * @param {{ min: number[], max: number[] }} acc
      * @param {number} point
-     * @param {number} index
+     * @param {number} dimension
      */
-    function reducer(acc, point, index) {
-      // [x, y, z, x, y, z, x, y, z, ...]
-      const dimension = index % 3;
-
+    function reducer(acc, point, dimension) {
       acc.min[dimension] = Math.min(acc.min[dimension], point);
       acc.max[dimension] = Math.max(acc.max[dimension], point);
 
       return acc;
     }
 
-    const { min, max } = triangles.reduce(
-      reducer,
-      lines.reduce(reducer, {
+    /**
+     * @param {{ min: number[], max: number[] }} acc
+     * @param {number} point
+     * @param {number} index
+     */
+    function opaqueTriangleReducer(acc, point, index) {
+      // [x, y, z, r, g, b, x, y, z, r, g, b, x, y, z, r, g, b, ...]
+      const dimension = index % 6;
+
+      if (dimension >= 3) {
+        return acc;
+      }
+
+      return reducer(acc, point, dimension);
+    }
+
+    /**
+     * @param {{ min: number[], max: number[] }} acc
+     * @param {number} point
+     * @param {number} index
+     */
+    function transparentTriangleReducer(acc, point, index) {
+      // [x, y, z, r, g, b, a, x, y, z, r, g, b, a, x, y, z, r, g, b, a, ...]
+      const dimension = index % 7;
+
+      if (dimension >= 3) {
+        return acc;
+      }
+
+      return reducer(acc, point, dimension);
+    }
+
+    /**
+     * @param {{ min: number[], max: number[] }} acc
+     * @param {number} point
+     * @param {number} index
+     */
+    function lineReducer(acc, point, index) {
+      // [x, y, z, x, y, z, x, y, z, ...]
+      const dimension = index % 3;
+
+      return reducer(acc, point, dimension);
+    }
+
+    const {
+      min,
+      max,
+    } = //opaqueTriangles.reduce(
+      // opaqueTriangleReducer,
+      // transparentTriangles.reduce(
+      //   transparentTriangleReducer,
+      lines.reduce(lineReducer, {
         min: [Infinity, Infinity, Infinity],
         max: [-Infinity, -Infinity, -Infinity],
-      })
-    );
+      });
+    // )
+    // );
 
     const center = [
       (min[0] + max[0]) / 2,
@@ -103,14 +150,14 @@ export class Part {
 }
 
 /**
- * @typedef {"lines" | "optionalLines" | "triangles"} GeometryType
+ * @typedef {"lines" | "optionalLines" | "opaqueTriangles" | "transparentTriangles"} GeometryType
  */
 
 /** @typedef {Record<GeometryType, number[]>} Geometry */
 
 /**
  * @typedef {{
- *   color: number;
+ *   color: Color | null;
  *   transformation: Matrix | undefined;
  *   invert: boolean;
  * }} RenderArgs
@@ -127,13 +174,15 @@ export class Part {
 const EmptyRenderResult = () => ({
   lines: [],
   optionalLines: [],
-  triangles: [],
+  opaqueTriangles: [],
+  transparentTriangles: [],
   subFiles: [],
 });
 
 /**
  * @typedef {{
  *   invert: boolean;
+ *   colors: Colors;
  * }} Context
  */
 
@@ -141,8 +190,9 @@ export class File {
   /**
    * @param {string} name
    * @param {string} contents
+   * @param {Colors} colors
    */
-  constructor(name, contents) {
+  constructor(name, contents, colors) {
     this.name = name;
 
     this.commands = [];
@@ -161,7 +211,12 @@ export class File {
       let parsed;
       if (BFC_INVERTNEXT.test(command)) {
         invertNext = true;
-      } else if ((parsed = DrawCommand.from(command, { invert: invertNext }))) {
+      } else if (
+        (parsed = DrawCommand.from(command, {
+          invert: invertNext,
+          colors,
+        }))
+      ) {
         invertNext = false;
 
         this.commands.push(parsed);
@@ -222,7 +277,7 @@ class Command {
 /** @abstract */
 class DrawCommand extends Command {
   /**
-   * @param {number} color
+   * @param {Color | null} color
    * @param {Readonly<Context>} context
    */
   constructor(color, context) {
@@ -254,10 +309,12 @@ class DrawCommand extends Command {
 class DrawFile extends DrawCommand {
   /**
    * @param {string} fileName
-   * @param {RenderArgs} args
+   * @param {Color | null} color
+   * @param {Matrix | undefined} transformation
+   * @param {boolean} invert
    * @param {Readonly<Context>} context
    */
-  constructor(fileName, { color, transformation, invert }, context) {
+  constructor(fileName, color, transformation, invert, context) {
     super(color, context);
     this.transformation = transformation ?? identity;
     this.invert = invert;
@@ -270,11 +327,11 @@ class DrawFile extends DrawCommand {
    *
    * @returns {RenderResult}
    */
-  render({ transformation, invert }, accumulator) {
+  render({ color, transformation, invert }, accumulator) {
     accumulator ??= EmptyRenderResult();
     accumulator.subFiles.push({
       fileName: this.fileName,
-      color: this.color,
+      color: this.color ?? color,
       transformation: multiply(this.transformation, transformation),
       invert: this.shouldInvert(invert),
     });
@@ -287,7 +344,9 @@ class DrawFile extends DrawCommand {
    * @param {Context} context
    */
   static from(command, context) {
-    const [_type, color, ...tokens] = command.split(/\s+/);
+    const [_type, colorCode, ...tokens] = command.split(/\s+/);
+
+    const color = context.colors.for(colorCode);
 
     const [fileStart, ...fileRest] = tokens.splice(12);
 
@@ -311,11 +370,9 @@ class DrawFile extends DrawCommand {
 
     return new DrawFile(
       fileName,
-      {
-        color: Number.parseInt(color),
-        transformation: [a, b, c, x, d, e, f, y, g, h, i, z, 0, 0, 0, 1],
-        invert: inverted,
-      },
+      color,
+      [a, b, c, x, d, e, f, y, g, h, i, z, 0, 0, 0, 1],
+      inverted,
       context
     );
   }
@@ -329,11 +386,8 @@ class DrawFile extends DrawCommand {
 }
 
 class DrawGeometry extends DrawCommand {
-  /** @readonly @type {GeometryType} */
-  type = "triangles";
-
   /**
-   * @param {number} color
+   * @param {Color | null} color
    * @param {number[][]} coordinates
    * @param {Readonly<Context>} context
    */
@@ -344,27 +398,56 @@ class DrawGeometry extends DrawCommand {
   }
 
   /**
+   * @param {string} command
+   * @param {Readonly<Context>} context
+   */
+  static from(command, context) {
+    const [_type, colorCode, ...points] = command
+      .split(/\s+/)
+      .map(Number.parseFloat);
+
+    const color = context.colors.for(colorCode);
+
+    const coordinates = [];
+    for (let i = 0; i < points.length; i += 3) {
+      coordinates.push([points[i], points[i + 1], points[i + 2]]);
+    }
+
+    return new this(color, coordinates, context);
+  }
+}
+
+class DrawTriangle extends DrawGeometry {
+  /**
    * @param {RenderArgs} args
    * @param {RenderResult} [accumulator]
    *
    * @returns {RenderResult}
    */
-  render({ transformation, invert }, accumulator) {
+  render({ color, transformation, invert }, accumulator) {
     accumulator ??= EmptyRenderResult();
+
+    const [r, g, b, a] = this.rgba(color);
+
+    const transparent = a !== 255;
+
+    const geometry = transparent
+      ? accumulator.transparentTriangles
+      : accumulator.opaqueTriangles;
 
     const coordinates = this.shouldInvert(invert)
       ? this.invertedCoordinates
       : this.coordinates;
 
     // Extend geometry array once instead of multiple pushes
-    const geometry = accumulator[this.type];
     const startIndex = geometry.length;
     const pointCount = coordinates.length;
-    geometry.length = startIndex + pointCount * 3;
+    const stride = 7;
+    geometry.length = startIndex + pointCount * stride;
 
     for (let i = 0; i < pointCount; i++) {
       const [x, y, z] = coordinates[i];
-      const outOffset = startIndex + i * 3;
+      const outOffset = startIndex + i * stride;
 
       let transformedX = x;
       let transformedY = y;
@@ -384,37 +467,27 @@ class DrawGeometry extends DrawCommand {
       geometry[outOffset] = transformedX;
       geometry[outOffset + 1] = transformedZ;
       geometry[outOffset + 2] = transformedY;
+
+      geometry[outOffset + 3] = r;
+      geometry[outOffset + 4] = g;
+      geometry[outOffset + 5] = b;
+      geometry[outOffset + 6] = a;
     }
 
     return accumulator;
   }
 
   /**
-   * @param {string} command
-   * @param {Readonly<Context>} context
+   * @param {Color | null} color
    */
-  static from(command, context) {
-    const [_type, color, ...points] = command
-      .split(/\s+/)
-      .map(Number.parseFloat);
-
-    const coordinates = [];
-    for (let i = 0; i < points.length; i += 3) {
-      coordinates.push([points[i], points[i + 1], points[i + 2]]);
-    }
-
-    return new this(color, coordinates, context);
+  rgba(color) {
+    return this.color?.rgba ?? color?.rgba ?? Color.UNSPECIFIED_RGBA;
   }
-}
-
-class DrawTriangle extends DrawGeometry {
-  /** @type {GeometryType} */
-  type = "triangles";
 }
 
 class DrawQuadrilateral extends DrawTriangle {
   /**
-   * @param {number} color
+   * @param {Color} color
    * @param {number[][]} coordinates
    * @param {Readonly<Context>} context
    */
@@ -439,6 +512,60 @@ class DrawLine extends DrawGeometry {
   /** @type {GeometryType} */
   type = "lines";
 
+  /**
+   * @param {Color | null} color
+   * @param {number[][]} coordinates
+   * @param {Readonly<Context>} context
+   */
+  constructor(color, coordinates, context) {
+    super(null, coordinates, context);
+  }
+
+  /**
+   * @param {RenderArgs} args
+   * @param {RenderResult} [accumulator]
+   *
+   * @returns {RenderResult}
+   */
+  render({ transformation }, accumulator) {
+    accumulator ??= EmptyRenderResult();
+    const geometry = accumulator[this.type];
+
+    const coordinates = this.coordinates;
+
+    // Extend geometry array once instead of multiple pushes
+    const startIndex = geometry.length;
+    const pointCount = coordinates.length;
+    const stride = 3;
+    geometry.length = startIndex + pointCount * stride;
+
+    for (let i = 0; i < pointCount; i++) {
+      const [x, y, z] = coordinates[i];
+      const outOffset = startIndex + i * stride;
+
+      let transformedX = x;
+      let transformedY = y;
+      let transformedZ = z;
+
+      if (transformation) {
+        const [a, b, c, tx, d, e, f, ty, g, h, ii, tz] = transformation;
+        transformedX = a * x + b * y + c * z + tx;
+        transformedY = d * x + e * y + f * z + ty;
+        transformedZ = g * x + h * y + ii * z + tz;
+      }
+
+      /*
+       * Map an LDraw Coordinate (where -y is out of the page)
+       * to a GPU Coordinate (where -z is out of the page).
+       */
+      geometry[outOffset] = transformedX;
+      geometry[outOffset + 1] = transformedZ;
+      geometry[outOffset + 2] = transformedY;
+    }
+
+    return accumulator;
+  }
+
   shouldInvert() {
     // Never invert lines
     return false;
@@ -459,7 +586,65 @@ const CommandMap = {
   [LineType.DrawOptionalLine]: DrawOptionalLine,
 };
 
+export class Configuration {
+  /**
+   * @param {Colors} colors
+   */
+  constructor(colors) {
+    this.colors = colors;
+  }
+
+  /**
+   * @param {string} contents
+   */
+  static from(contents) {
+    const commands = contents.split("\n").filter((l) => !!l.trim());
+
+    const colors = commands.map(Color.from).filter((c) => c != null);
+
+    return new this(new Colors(colors));
+  }
+}
+
+export class Colors {
+  #colors;
+
+  /**
+   * @param {readonly Color[]} colors
+   */
+  constructor(colors) {
+    this.#colors = new Map(colors.map((c) => [c.code, c]));
+  }
+
+  /**
+   * @param {number | string} code
+   */
+  for(code) {
+    code = typeof code === "number" ? code : Number.parseInt(code, 10);
+
+    if (code === Color.CURRENT_COLOR || code === Color.EDGE_COLOR) {
+      return null;
+    }
+
+    const color = this.#colors.get(code);
+
+    if (!color) {
+      throw new Error(`No color defined for code ${code}`);
+    }
+
+    return color;
+  }
+}
+
 export class Color {
+  static CURRENT_COLOR = 16;
+
+  static EDGE_COLOR = 24;
+
+  static DEFAULT = new Color("DEFAULT_COLOR", -1, "#1B2A34", "#2B4354");
+
+  static UNSPECIFIED_RGBA = [-1, -1, -1, 0];
+
   /**
    * @param {string} name
    * @param {number} code
@@ -471,6 +656,18 @@ export class Color {
     this.code = code;
     this.value = value;
     this.edge = edge;
+    const r = Number.parseInt(value.slice(1, 3), 16);
+    const g = Number.parseInt(value.slice(3, 5), 16);
+    const b = Number.parseInt(value.slice(5, 7), 16);
+    const a = value.length === 9 ? Number.parseInt(value.slice(7), 16) : 255;
+    this.rgba = [r, g, b, a];
+  }
+
+  /**
+   * @param {string} hex
+   */
+  static custom(hex) {
+    return new Color("Custom", -1, hex, hex);
   }
 
   /**
@@ -487,8 +684,8 @@ export class Color {
      * [CHROME | PEARLESCENT | RUBBER | MATTE_METALLIC | METAL | MATERIAL <params>]
      */
     let [
-      _type,
-      _COLOUR,
+      type,
+      metaCommand,
       name,
       _CODE,
       code,
@@ -499,6 +696,10 @@ export class Color {
       ...optional
     ] = command.split(/\s+/);
 
+    if (type !== "0" || metaCommand !== "!COLOUR") {
+      return undefined;
+    }
+
     const alphaParam = optional.findIndex((p) => p.toLowerCase() === "alpha");
 
     if (alphaParam !== -1) {
@@ -508,6 +709,11 @@ export class Color {
       edge += alphaHex;
     }
 
-    return new Color(name, Number.parseInt(code, 10), value, edge);
+    return new Color(
+      name.replaceAll("_", " "),
+      Number.parseInt(code, 10),
+      value,
+      edge
+    );
   }
 }
