@@ -22,15 +22,12 @@ export class Part {
       invert: args?.invert ?? false,
     };
 
-    const { lines, optionalLines, opaqueTriangles, transparentTriangles } =
-      this.#render(renderArgs, EmptyRenderResult());
+    const { lines, triangles } = this.#render(renderArgs, EmptyRenderResult());
 
     return {
-      lines: new Float32Array(lines),
-      optionalLines: new Float32Array(optionalLines),
-      opaqueTriangles: new Float32Array(opaqueTriangles),
-      transparentTriangles: new Float32Array(transparentTriangles),
-      ...this.#boundingBox(lines, opaqueTriangles, transparentTriangles),
+      lines,
+      triangles,
+      ...this.#boundingBox(lines),
     };
   }
 
@@ -38,7 +35,7 @@ export class Part {
    * @param {RenderArgs} args
    * @param {RenderResult} accumulator
    *
-   * @returns {Record<GeometryType, number[]>}
+   * @returns {RenderResult}
    */
   #render(args, accumulator) {
     const { subFiles } = this.file.render(args, accumulator);
@@ -58,80 +55,28 @@ export class Part {
   }
 
   /**
-   * @param {number[]} lines
-   * @param {number[]} opaqueTriangles
-   * @param {number[]} transparentTriangles
+   * @param {RenderLine[]} lines
    */
-  #boundingBox(lines, opaqueTriangles, transparentTriangles) {
-    /**
-     * @param {{ min: number[], max: number[] }} acc
-     * @param {number} point
-     * @param {number} dimension
-     */
-    function reducer(acc, point, dimension) {
-      acc.min[dimension] = Math.min(acc.min[dimension], point);
-      acc.max[dimension] = Math.max(acc.max[dimension], point);
+  #boundingBox(lines) {
+    let min = [
+      Number.POSITIVE_INFINITY,
+      Number.POSITIVE_INFINITY,
+      Number.POSITIVE_INFINITY,
+    ];
+    let max = [
+      Number.NEGATIVE_INFINITY,
+      Number.NEGATIVE_INFINITY,
+      Number.NEGATIVE_INFINITY,
+    ];
 
-      return acc;
-    }
-
-    /**
-     * @param {{ min: number[], max: number[] }} acc
-     * @param {number} point
-     * @param {number} index
-     */
-    function opaqueTriangleReducer(acc, point, index) {
-      // [x, y, z, r, g, b, x, y, z, r, g, b, x, y, z, r, g, b, ...]
-      const dimension = index % 6;
-
-      if (dimension >= 3) {
-        return acc;
+    for (const { points } of lines) {
+      for (const point of points) {
+        for (let i = 0; i < point.length; i++) {
+          min[i] = Math.min(min[i], point[i]);
+          max[i] = Math.max(max[i], point[i]);
+        }
       }
-
-      return reducer(acc, point, dimension);
     }
-
-    /**
-     * @param {{ min: number[], max: number[] }} acc
-     * @param {number} point
-     * @param {number} index
-     */
-    function transparentTriangleReducer(acc, point, index) {
-      // [x, y, z, r, g, b, a, x, y, z, r, g, b, a, x, y, z, r, g, b, a, ...]
-      const dimension = index % 7;
-
-      if (dimension >= 3) {
-        return acc;
-      }
-
-      return reducer(acc, point, dimension);
-    }
-
-    /**
-     * @param {{ min: number[], max: number[] }} acc
-     * @param {number} point
-     * @param {number} index
-     */
-    function lineReducer(acc, point, index) {
-      // [x, y, z, x, y, z, x, y, z, ...]
-      const dimension = index % 3;
-
-      return reducer(acc, point, dimension);
-    }
-
-    const {
-      min,
-      max,
-    } = //opaqueTriangles.reduce(
-      // opaqueTriangleReducer,
-      // transparentTriangles.reduce(
-      //   transparentTriangleReducer,
-      lines.reduce(lineReducer, {
-        min: [Infinity, Infinity, Infinity],
-        max: [-Infinity, -Infinity, -Infinity],
-      });
-    // )
-    // );
 
     const center = [
       (min[0] + max[0]) / 2,
@@ -149,17 +94,31 @@ export class Part {
   }
 }
 
-/**
- * @typedef {"lines" | "optionalLines" | "opaqueTriangles" | "transparentTriangles"} GeometryType
- */
+/** @typedef {[number, number, number]} Coordinate */
 
-/** @typedef {Record<GeometryType, number[]>} Geometry */
+/** @typedef {[Coordinate, Coordinate, Coordinate]} Triangle */
+
+/** @typedef {[number, number, number, number]} Rgba */
 
 /**
  * @typedef {{
- *   color: Color | null;
- *   transformation: Matrix | undefined;
- *   invert: boolean;
+ *   points: [Coordinate, Coordinate];
+ *   controlPoints?: [Coordinate, Coordinate] | undefined;
+ * }} RenderLine
+ */
+
+/**
+ * @typedef {{
+ *   lines: RenderLine[];
+ *   triangles: { vertices: Triangle; color: Rgba | null }[];
+ * }} Geometry
+ */
+
+/**
+ * @typedef {{
+ *   color?: Color | null | undefined;
+ *   transformation?: Matrix | undefined;
+ *   invert?: boolean;
  * }} RenderArgs
  */
 
@@ -174,8 +133,7 @@ export class Part {
 const EmptyRenderResult = () => ({
   lines: [],
   optionalLines: [],
-  opaqueTriangles: [],
-  transparentTriangles: [],
+  triangles: [],
   subFiles: [],
 });
 
@@ -234,7 +192,10 @@ export class File {
    *
    * @returns {RenderResult}
    */
-  render(args, accumulator) {
+  render(
+    args = { transformation: undefined, color: null, invert: false },
+    accumulator
+  ) {
     accumulator ??= EmptyRenderResult();
 
     for (const command of this.commands) {
@@ -301,7 +262,7 @@ class DrawCommand extends Command {
   /**
    * @param {boolean} invert
    */
-  shouldInvert(invert) {
+  shouldInvert(invert = false) {
     return invert != this.context.invert;
   }
 }
@@ -380,21 +341,26 @@ class DrawFile extends DrawCommand {
   /**
    * @param {boolean} invert
    */
-  shouldInvert(invert) {
+  shouldInvert(invert = false) {
     return super.shouldInvert(invert) !== this.invert;
   }
 }
 
+/** @abstract */
 class DrawGeometry extends DrawCommand {
   /**
    * @param {Color | null} color
-   * @param {number[][]} coordinates
+   * @param {Coordinate[]} coordinates
    * @param {Readonly<Context>} context
    */
   constructor(color, coordinates, context) {
     super(color, context);
-    this.coordinates = coordinates;
-    this.invertedCoordinates = coordinates.toReversed();
+
+    if (new.target === DrawGeometry) {
+      throw new Error(
+        "DrawGeometry is abstract. Did you mean to provide a subclass?"
+      );
+    }
   }
 
   /**
@@ -408,6 +374,7 @@ class DrawGeometry extends DrawCommand {
 
     const color = context.colors.for(colorCode);
 
+    /** @type {Coordinate[]} */
     const coordinates = [];
     for (let i = 0; i < points.length; i += 3) {
       coordinates.push([points[i], points[i + 1], points[i + 2]]);
@@ -415,9 +382,80 @@ class DrawGeometry extends DrawCommand {
 
     return new this(color, coordinates, context);
   }
+
+  /**
+   * @template {Coordinate[]} T
+   * @param {Matrix | null | undefined} transformation
+   * @param {T} coordinates
+   *
+   * @returns {T}
+   */
+  static transform(transformation, coordinates) {
+    return /** @type {T} */ (
+      coordinates.map(
+        DrawGeometry.transformCoordinate.bind(null, transformation)
+      )
+    );
+  }
+
+  /**
+   * @param {Matrix | null | undefined} transformation
+   * @param {Coordinate} coordinate
+   *
+   * @returns {Coordinate}
+   */
+  static transformCoordinate(transformation, [x, y, z]) {
+    let transformedX = x;
+    let transformedY = y;
+    let transformedZ = z;
+
+    if (transformation) {
+      const [a, b, c, tx, d, e, f, ty, g, h, ii, tz] = transformation;
+      transformedX = a * x + b * y + c * z + tx;
+      transformedY = d * x + e * y + f * z + ty;
+      transformedZ = g * x + h * y + ii * z + tz;
+    }
+
+    /*
+     * Map an LDraw Coordinate (where -y is out of the page)
+     * to a GPU Coordinate (where -z is out of the page).
+     */
+    return [transformedX, transformedZ, transformedY];
+  }
 }
 
 class DrawTriangle extends DrawGeometry {
+  /** @readonly @type {Triangle[]} */
+  triangles;
+
+  /** @readonly @type {Triangle[]} */
+  invertedTriangles;
+
+  /**
+   * @param {Color | null} color
+   * @param {Coordinate[]} coordinates
+   * @param {Readonly<Context>} context
+   */
+  constructor(color, coordinates, context) {
+    super(color, coordinates, context);
+
+    this.triangles = [];
+    this.invertedTriangles = [];
+
+    for (let i = 0; i < coordinates.length; i += 3) {
+      this.triangles.push([
+        coordinates[i],
+        coordinates[i + 1],
+        coordinates[i + 2],
+      ]);
+      this.invertedTriangles.push([
+        coordinates[i + 2],
+        coordinates[i + 1],
+        coordinates[i],
+      ]);
+    }
+  }
+
   /**
    * @param {RenderArgs} args
    * @param {RenderResult} [accumulator]
@@ -427,68 +465,46 @@ class DrawTriangle extends DrawGeometry {
   render({ color, transformation, invert }, accumulator) {
     accumulator ??= EmptyRenderResult();
 
-    const [r, g, b, a] = this.rgba(color);
+    const rgba = this.rgba(color);
 
-    const transparent = a !== 255;
+    const geometry = accumulator.triangles;
 
-    const geometry = transparent
-      ? accumulator.transparentTriangles
-      : accumulator.opaqueTriangles;
+    const triangles = this.shouldInvert(invert)
+      ? this.invertedTriangles
+      : this.triangles;
 
-    const coordinates = this.shouldInvert(invert)
-      ? this.invertedCoordinates
-      : this.coordinates;
-
-    // Extend geometry array once instead of multiple pushes
-    const startIndex = geometry.length;
-    const pointCount = coordinates.length;
-    const stride = 7;
-    geometry.length = startIndex + pointCount * stride;
-
-    for (let i = 0; i < pointCount; i++) {
-      const [x, y, z] = coordinates[i];
-      const outOffset = startIndex + i * stride;
-
-      let transformedX = x;
-      let transformedY = y;
-      let transformedZ = z;
-
-      if (transformation) {
-        const [a, b, c, tx, d, e, f, ty, g, h, ii, tz] = transformation;
-        transformedX = a * x + b * y + c * z + tx;
-        transformedY = d * x + e * y + f * z + ty;
-        transformedZ = g * x + h * y + ii * z + tz;
-      }
-
-      /*
-       * Map an LDraw Coordinate (where -y is out of the page)
-       * to a GPU Coordinate (where -z is out of the page).
-       */
-      geometry[outOffset] = transformedX;
-      geometry[outOffset + 1] = transformedZ;
-      geometry[outOffset + 2] = transformedY;
-
-      geometry[outOffset + 3] = r;
-      geometry[outOffset + 4] = g;
-      geometry[outOffset + 5] = b;
-      geometry[outOffset + 6] = a;
+    for (const triangle of triangles) {
+      geometry.push({
+        vertices: DrawTriangle.transformTriangle(transformation, triangle),
+        color: rgba,
+      });
     }
 
     return accumulator;
   }
 
   /**
-   * @param {Color | null} color
+   * @param {Color | null | undefined} color
    */
   rgba(color) {
-    return this.color?.rgba ?? color?.rgba ?? Color.UNSPECIFIED_RGBA;
+    return this.color?.rgba ?? color?.rgba ?? null;
+  }
+
+  /**
+   * @param {Matrix | null | undefined} transformation
+   * @param {Triangle} triangle
+   *
+   * @returns {Triangle}
+   */
+  static transformTriangle(transformation, triangle) {
+    return DrawGeometry.transform(transformation, triangle);
   }
 }
 
 class DrawQuadrilateral extends DrawTriangle {
   /**
    * @param {Color} color
-   * @param {number[][]} coordinates
+   * @param {Coordinate[]} coordinates
    * @param {Readonly<Context>} context
    */
   constructor(color, coordinates, context) {
@@ -509,16 +525,22 @@ class DrawQuadrilateral extends DrawTriangle {
 }
 
 class DrawLine extends DrawGeometry {
-  /** @type {GeometryType} */
-  type = "lines";
+  /** @readonly @type {[Coordinate, Coordinate]} */
+  coordinates;
+
+  /** @readonly @type {[Coordinate, Coordinate] | undefined} */
+  controlPoints;
 
   /**
    * @param {Color | null} color
-   * @param {number[][]} coordinates
+   * @param {Coordinate[]} coordinates
    * @param {Readonly<Context>} context
    */
   constructor(color, coordinates, context) {
     super(null, coordinates, context);
+    const [first, second, control1, control2] = coordinates;
+    this.coordinates = [first, second];
+    this.controlPoints = control1 ? [control1, control2] : undefined;
   }
 
   /**
@@ -529,39 +551,19 @@ class DrawLine extends DrawGeometry {
    */
   render({ transformation }, accumulator) {
     accumulator ??= EmptyRenderResult();
-    const geometry = accumulator[this.type];
 
-    const coordinates = this.coordinates;
+    const geometry = accumulator.lines;
 
-    // Extend geometry array once instead of multiple pushes
-    const startIndex = geometry.length;
-    const pointCount = coordinates.length;
-    const stride = 3;
-    geometry.length = startIndex + pointCount * stride;
+    const points = DrawGeometry.transform(transformation, this.coordinates);
 
-    for (let i = 0; i < pointCount; i++) {
-      const [x, y, z] = coordinates[i];
-      const outOffset = startIndex + i * stride;
+    const controlPoints = this.controlPoints
+      ? DrawGeometry.transform(transformation, this.controlPoints)
+      : undefined;
 
-      let transformedX = x;
-      let transformedY = y;
-      let transformedZ = z;
-
-      if (transformation) {
-        const [a, b, c, tx, d, e, f, ty, g, h, ii, tz] = transformation;
-        transformedX = a * x + b * y + c * z + tx;
-        transformedY = d * x + e * y + f * z + ty;
-        transformedZ = g * x + h * y + ii * z + tz;
-      }
-
-      /*
-       * Map an LDraw Coordinate (where -y is out of the page)
-       * to a GPU Coordinate (where -z is out of the page).
-       */
-      geometry[outOffset] = transformedX;
-      geometry[outOffset + 1] = transformedZ;
-      geometry[outOffset + 2] = transformedY;
-    }
+    geometry.push({
+      points,
+      controlPoints,
+    });
 
     return accumulator;
   }
@@ -572,18 +574,13 @@ class DrawLine extends DrawGeometry {
   }
 }
 
-class DrawOptionalLine extends DrawLine {
-  /** @type {GeometryType} */
-  type = "optionalLines";
-}
-
 /** @type {Record<number, { from(command: string, context: Readonly<Context>): DrawCommand}>} */
 const CommandMap = {
   [LineType.DrawFile]: DrawFile,
   [LineType.DrawLine]: DrawLine,
+  [LineType.DrawOptionalLine]: DrawLine,
   [LineType.DrawTriangle]: DrawTriangle,
   [LineType.DrawQuadrilateral]: DrawQuadrilateral,
-  [LineType.DrawOptionalLine]: DrawOptionalLine,
 };
 
 export class Configuration {
@@ -643,7 +640,8 @@ export class Color {
 
   static DEFAULT = new Color("DEFAULT_COLOR", -1, "#1B2A34", "#2B4354");
 
-  static UNSPECIFIED_RGBA = [-1, -1, -1, 0];
+  /** @readonly @type {Rgba} */
+  rgba;
 
   /**
    * @param {string} name

@@ -171,7 +171,7 @@ export function determinant([a, d, g, b, e, h, c, f, i]) {
 /**
  *
  * @param {Matrix} a
- * @param {Matrix | undefined} b
+ * @param {Matrix | null | undefined} b
  *
  * @returns {Matrix}
  */

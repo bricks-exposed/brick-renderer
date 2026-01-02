@@ -256,14 +256,14 @@ export class Renderer {
 
     const {
       lines,
-      optionalLines,
       opaqueTriangles,
       transparentTriangles,
-      largestExtent,
+      optionalLines,
+      viewBox,
       center,
-    } = part.render();
+    } = Renderer.renderPart(part);
 
-    this.viewBox = largestExtent / 2;
+    this.viewBox = viewBox;
     this.center = center;
 
     const edgeVertexBuffer = this.device.createBuffer({
@@ -321,6 +321,56 @@ export class Renderer {
       0,
       optionalLines
     );
+  }
+
+  /**
+   * @param {Part} part
+   * @returns
+   */
+  static renderPart(part) {
+    const {
+      lines: rawLines,
+      triangles: rawTriangles,
+      largestExtent,
+      center,
+    } = part.render();
+
+    /** @type {number[]} */
+    const lines = [];
+
+    /** @type {number[]} */
+    const optionalLines = [];
+
+    /** @type {number[]} */
+    const opaqueTriangles = [];
+
+    /** @type {number[]} */
+    const transparentTriangles = [];
+
+    for (const line of rawLines) {
+      const points = line.points.flat();
+      if (line.controlPoints) {
+        optionalLines.push(...points, ...line.controlPoints.flat());
+      } else {
+        lines.push(...points);
+      }
+    }
+
+    for (const { vertices, color } of rawTriangles) {
+      const array = color?.[3] === 255 ? opaqueTriangles : transparentTriangles;
+      for (const vertex of vertices) {
+        array.push(...vertex, ...(color ?? [-1, -1, -1, -1]));
+      }
+    }
+
+    return {
+      lines: new Float32Array(lines),
+      optionalLines: new Float32Array(optionalLines),
+      opaqueTriangles: new Float32Array(opaqueTriangles),
+      transparentTriangles: new Float32Array(transparentTriangles),
+      viewBox: largestExtent / 2,
+      center,
+    };
   }
 
   /**
@@ -567,7 +617,7 @@ const TRIANGLE_SHADER = `
     var color = select(
       input.color,
       defaultColor,
-      all(input.color.xyz == vec3(-1.0, -1.0, -1.0)))
+      all(input.color == vec4(-1.0, -1.0, -1.0, -1.0)))
       / 255;
 
     return color * color.w;
