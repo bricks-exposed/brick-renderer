@@ -87,6 +87,31 @@ export class Renderer {
       usage: GPUBufferUsage.COPY_DST | GPUBufferUsage.UNIFORM,
     });
 
+    const highestCode = colors.all.reduce(
+      (acc, { code }) => Math.max(acc, code),
+      0
+    );
+
+    const textureWidth = 256;
+    const textureHeight = Math.ceil((highestCode + 1) / textureWidth);
+    const textureData = new Uint8Array(textureWidth * textureHeight * 4);
+    for (const color of colors.all) {
+      textureData.set(color.rgba, color.code * 4);
+    }
+
+    this.colorTexture = device.createTexture({
+      label: "Color map texture",
+      format: "rgba8unorm",
+      size: { width: textureWidth, height: textureHeight },
+      usage: GPUTextureUsage.COPY_DST | GPUTextureUsage.TEXTURE_BINDING,
+    });
+    device.queue.writeTexture(
+      { texture: this.colorTexture },
+      textureData,
+      { bytesPerRow: textureWidth * 4 },
+      { width: textureWidth, height: textureHeight }
+    );
+
     const bindGroupLayout = device.createBindGroupLayout({
       label: "Rotation and color uniform bind group layout",
       entries: [
@@ -103,6 +128,11 @@ export class Renderer {
           visibility: GPUShaderStage.FRAGMENT | GPUShaderStage.COMPUTE,
           buffer: { type: "uniform" },
         },
+        {
+          binding: 2,
+          visibility: GPUShaderStage.FRAGMENT,
+          texture: { sampleType: "float" },
+        },
       ],
     });
 
@@ -117,6 +147,10 @@ export class Renderer {
         {
           binding: 1,
           resource: { buffer: this.colorBuffer },
+        },
+        {
+          binding: 2,
+          resource: this.colorTexture.createView(),
         },
       ],
     });
@@ -180,7 +214,7 @@ export class Renderer {
         entryPoint: "vertexMain",
         buffers: [
           {
-            arrayStride: 7 * 4,
+            arrayStride: 4 * 4,
             attributes: [
               {
                 format: "float32x3",
@@ -188,7 +222,7 @@ export class Renderer {
                 shaderLocation: 0,
               },
               {
-                format: "float32x4",
+                format: "float32",
                 offset: 3 * 4,
                 shaderLocation: 1,
               },
@@ -290,7 +324,7 @@ export class Renderer {
       opaqueTriangles
     );
     this.opaqueTriangleRender = {
-      count: opaqueTriangles.length / 7,
+      count: opaqueTriangles.length / 4,
       vertexBuffer: opaqueTriangleVertexBuffer,
       pipeline: opaqueTriangePipeline,
     };
@@ -305,7 +339,7 @@ export class Renderer {
       transparentTriangles
     );
     this.transparentTriangleRender = {
-      count: transparentTriangles.length / 7,
+      count: transparentTriangles.length / 4,
       vertexBuffer: transparentTriangleVertexBuffer,
       pipeline: transparentTriangePipeline,
     };
@@ -360,11 +394,10 @@ export class Renderer {
     }
 
     for (const { vertices, color: colorCode } of rawTriangles) {
-      const color =
-        colorCode != null ? this.colors.for(colorCode)?.rgba : undefined;
-      const array = color?.[3] === 255 ? opaqueTriangles : transparentTriangles;
+      const color = this.colors.for(colorCode);
+      const array = color?.opaque ? opaqueTriangles : transparentTriangles;
       for (const vertex of vertices) {
-        array.push(...vertex, ...(color ?? [-1, -1, -1, -1]));
+        array.push(...vertex, colorCode ?? -1);
       }
     }
 
@@ -597,17 +630,19 @@ const OPTIONAL_LINE_SHADER = `
 const TRIANGLE_SHADER = `
   struct VertexInput {
     @location(0) position: vec4f,
-    @location(1) color: vec4f,
+    @location(1) color: f32,
   }
 
   struct VertexOutput {
     @builtin(position) position: vec4f,
-    @location(0) color: vec4f,
+    @location(0) color: f32,
   }
 
   @group(0) @binding(0) var<uniform> rotationMatrix: mat4x4f;
 
   @group(0) @binding(1) var<uniform> defaultColor: vec4f;
+
+  @group(0) @binding(2) var colorTexture: texture_2d<f32>;
 
   @vertex
   fn vertexMain(input: VertexInput) -> VertexOutput {
@@ -619,11 +654,17 @@ const TRIANGLE_SHADER = `
 
   @fragment
   fn fragmentMain(input: VertexOutput) -> @location(0) vec4f {
-    var color = select(
-      input.color,
-      defaultColor,
-      all(input.color == vec4(-1.0, -1.0, -1.0, -1.0)))
-      / 255;
+    let colorIndex = i32(input.color);
+
+    var color: vec4f;
+
+    if (colorIndex == -1) {
+      color = defaultColor / 255;
+    } else {
+      let x = colorIndex % 256;
+      let y = colorIndex / 256;
+      color = textureLoad(colorTexture, vec2i(x, y), 0);
+    }
 
     return color * color.w;
   }

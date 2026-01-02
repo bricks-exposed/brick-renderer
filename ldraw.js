@@ -589,13 +589,18 @@ export class Colors {
    * @param {readonly Color[]} colors
    */
   constructor(colors) {
+    this.all = colors;
     this.#colors = new Map(colors.map((c) => [c.code, c]));
   }
 
   /**
-   * @param {number | string} code
+   * @param {number | string | null | undefined} code
    */
   for(code) {
+    if (code == null) {
+      return null;
+    }
+
     code = typeof code === "number" ? code : Number.parseInt(code, 10);
 
     if (code === Color.CURRENT_COLOR || code === Color.EDGE_COLOR) {
@@ -638,6 +643,7 @@ export class Color {
     const b = Number.parseInt(value.slice(5, 7), 16);
     const a = value.length === 9 ? Number.parseInt(value.slice(7), 16) : 255;
     this.rgba = [r, g, b, a];
+    this.opaque = a === 255;
   }
 
   /**
