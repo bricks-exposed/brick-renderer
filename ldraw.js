@@ -1,5 +1,5 @@
 /** @import { Matrix } from "./matrix.js" */
-import { determinant, identity, multiply } from "./matrix.js";
+import * as matrix from "./matrix.js";
 
 export class Part {
   /**
@@ -10,6 +10,38 @@ export class Part {
   constructor(file, subParts) {
     this.file = file;
     this.subParts = new Map(subParts.map((p) => [p.file.name, p]));
+    this.viewBox = 1;
+    this.center = [0, 0, 0];
+  }
+
+  /**
+   * @param {Transform} transform
+   *
+   * @returns {Matrix}
+   */
+  transformMatrix(transform) {
+    return matrix.transform(
+      [
+        matrix.orthographic(
+          -this.viewBox,
+          this.viewBox,
+          -this.viewBox,
+          this.viewBox,
+          -(this.viewBox * 2),
+          this.viewBox * 2
+        ),
+        matrix.fromRotationX(transform.rotateX),
+        matrix.fromRotationY(transform.rotateY),
+        matrix.fromRotationZ(transform.rotateZ),
+        matrix.fromScaling(transform.scale),
+        matrix.fromTranslation(
+          -this.center[0],
+          -this.center[1],
+          -this.center[2]
+        ),
+      ],
+      matrix.identity
+    );
   }
 
   /**
@@ -24,11 +56,11 @@ export class Part {
 
     const { lines, triangles } = this.#render(renderArgs, EmptyRenderResult());
 
-    return {
-      lines,
-      triangles,
-      ...this.#boundingBox(lines),
-    };
+    const { largestExtent, center } = Part.#boundingBox(lines);
+
+    (this.viewBox = largestExtent / 2), (this.center = center);
+
+    return { lines, triangles };
   }
 
   /**
@@ -57,7 +89,7 @@ export class Part {
   /**
    * @param {RenderLine[]} lines
    */
-  #boundingBox(lines) {
+  static #boundingBox(lines) {
     let min = [
       Number.POSITIVE_INFINITY,
       Number.POSITIVE_INFINITY,
@@ -93,6 +125,15 @@ export class Part {
     return { min, max, largestExtent, center };
   }
 }
+
+/**
+ * @typedef {{
+ *   rotateX: number;
+ *   rotateY: number;
+ *   rotateZ: number;
+ *   scale: number;
+ * }} Transform
+ */
 
 /** @typedef {[number, number, number]} Coordinate */
 
@@ -267,7 +308,7 @@ class DrawFile extends DrawCommand {
    */
   constructor(fileName, color, transformation, invertSelf, parentInvert) {
     super(color, parentInvert);
-    this.transformation = transformation ?? identity;
+    this.transformation = transformation ?? matrix.identity;
     this.invertSelf = invertSelf;
     this.fileName = fileName;
   }
@@ -283,7 +324,7 @@ class DrawFile extends DrawCommand {
     accumulator.subFiles.push({
       fileName: this.fileName,
       color: this.color ?? color,
-      transformation: multiply(this.transformation, transformation),
+      transformation: matrix.multiply(this.transformation, transformation),
       invert: this.shouldInvert(invert),
     });
 
@@ -315,7 +356,7 @@ class DrawFile extends DrawCommand {
 
     const [x, y, z, ...abcdefghi] = tokens.map(Number.parseFloat);
 
-    const inverted = determinant(abcdefghi) < 0;
+    const inverted = matrix.determinant(abcdefghi) < 0;
 
     const [a, b, c, d, e, f, g, h, i] = abcdefghi;
 

@@ -1,51 +1,25 @@
 import { ConfigurationLoader, FileLoader, PartLoader } from "./part-loader.js";
 import { PartDb } from "./part-db.js";
-import { Renderer } from "./renderer.js";
+import { GpuRenderer } from "./renderer.js";
 import { Color } from "./ldraw.js";
 
-/**
- * @param {string} fileName
- * @param {string[]} paths
- */
-async function fetchPart(fileName, paths) {
-  return Promise.any(
-    paths.map(async function (path) {
-      const response = await fetch(path);
-
-      if (!response.ok) {
-        throw new Error(`Could not load ${path}: ${response.status}`);
-      }
-
-      return response.text();
-    })
-  );
-}
+const { partLoader, gpuRenderer } = await setup();
 
 /**
  * @param {HTMLCanvasElement} canvas
  * @param {HTMLFormElement} form
+ * @param {string} fileName
  */
-export async function initialize(canvas, form) {
-  // Smoother lines on high resolution displays
-  const devicePixelRatio = window.devicePixelRatio;
-  canvas.width = canvas.clientWidth * devicePixelRatio;
-  canvas.height = canvas.clientHeight * devicePixelRatio;
+export async function initialize(canvas, form, fileName) {
+  const renderer = gpuRenderer.to(canvas);
 
-  const partDb = await PartDb.open();
-
-  const fileLoader = new FileLoader(fetchPart, partDb);
-
-  const configuration = await new ConfigurationLoader(fileLoader).load();
-
-  const partLoader = new PartLoader(fileLoader);
-
-  const part = await partLoader.load("car.ldr");
+  const part = await partLoader.load(fileName ?? "car.ldr");
 
   if (!part) {
     throw new Error(`Part not found.`);
   }
 
-  const renderer = await Renderer.for(canvas, configuration.colors, part);
+  renderer.load(part);
 
   let animationFrame = -1;
 
@@ -77,4 +51,36 @@ export async function initialize(canvas, form) {
   form.addEventListener("reset", update);
 
   await update();
+}
+
+/**
+ * @param {string} fileName
+ * @param {string[]} paths
+ */
+async function fetchPart(fileName, paths) {
+  return Promise.any(
+    paths.map(async function (path) {
+      const response = await fetch(path);
+
+      if (!response.ok) {
+        throw new Error(`Could not load ${path}: ${response.status}`);
+      }
+
+      return response.text();
+    })
+  );
+}
+
+async function setup() {
+  const partDb = await PartDb.open();
+
+  const fileLoader = new FileLoader(fetchPart, partDb);
+
+  const configuration = await new ConfigurationLoader(fileLoader).load();
+
+  const partLoader = new PartLoader(fileLoader);
+
+  const gpuRenderer = await GpuRenderer.create(configuration.colors);
+
+  return { partLoader, gpuRenderer };
 }

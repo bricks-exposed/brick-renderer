@@ -1,91 +1,37 @@
+/** @import {Transform} from "./ldraw.js" */
 import { Color, Colors, Part } from "./ldraw.js";
-import * as matrix from "./matrix.js";
 
-export class Renderer {
-  /** @readonly @type {GPUVertexBufferLayout} */
-  static #optionalLineBufferLayout = {
-    // Instance buffer: 4 vec3f points (p1, p2, c1, c2) = 12 floats
-    arrayStride: 12 * 4,
-    stepMode: "instance",
-    attributes: [
-      {
-        format: "float32x3",
-        offset: 0,
-        shaderLocation: 0, // point 1
-      },
-      {
-        format: "float32x3",
-        offset: 12,
-        shaderLocation: 1, // point 2
-      },
-      {
-        format: "float32x3",
-        offset: 24,
-        shaderLocation: 2, // control point 1
-      },
-      {
-        format: "float32x3",
-        offset: 36,
-        shaderLocation: 3, // control point 2
-      },
-    ],
-  };
+/** @satisfies {GPUDepthStencilState} */
+const DEPTH_STENCIL = {
+  depthWriteEnabled: true,
+  depthCompare: "greater",
+  format: "depth24plus",
+};
 
-  /** @readonly @type {GPUDepthStencilState} */
-  static #depthStencil = {
-    depthWriteEnabled: true,
-    depthCompare: "greater",
-    format: "depth24plus",
-  };
-
+export class GpuRenderer {
   /**
    * @param {HTMLCanvasElement} canvas
-   * @param {Colors} colors
+   */
+  to(canvas) {
+    return new CanvasRenderer(this, canvas);
+  }
+
+  /**
    * @param {Part} part
    */
-  static async for(canvas, colors, part) {
-    const context = canvas.getContext("webgpu");
-    if (!context) {
-      throw new Error("Could not get canvas webgpu context");
-    }
-
-    const adapter = await navigator.gpu.requestAdapter();
-    if (!adapter) {
-      throw new Error("No appropriate GPUAdapter found.");
-    }
-
-    const device = await adapter.requestDevice();
-
-    const format = navigator.gpu.getPreferredCanvasFormat();
-
-    context.configure({ device, format, alphaMode: "premultiplied" });
-
-    return new Renderer(device, format, context, colors, part);
+  load(part) {
+    return new PartGeometry(this, part);
   }
 
   /**
    * @param {GPUDevice} device
    * @param {GPUTextureFormat} format
-   * @param {GPUCanvasContext} context
    * @param {Colors} colors
-   * @param {Part} part
    */
-  constructor(device, format, context, colors, part) {
+  constructor(device, format, colors) {
     this.device = device;
-    this.context = context;
+    this.format = format;
     this.colors = colors;
-
-    this.colorBuffer = device.createBuffer({
-      label: "Default color",
-      size: 4 * 4,
-      usage: GPUBufferUsage.COPY_DST | GPUBufferUsage.UNIFORM,
-    });
-
-    this.uniformBuffer = device.createBuffer({
-      label: "Rotation matrix",
-      size: 16 * 4,
-      usage: GPUBufferUsage.COPY_DST | GPUBufferUsage.UNIFORM,
-    });
 
     const highestCode = colors.all.reduce(
       (acc, { code }) => Math.max(acc, code),
@@ -112,7 +58,7 @@ export class Renderer {
       { width: textureWidth, height: textureHeight }
     );
 
-    const bindGroupLayout = device.createBindGroupLayout({
+    this.bindGroupLayout = device.createBindGroupLayout({
       label: "Rotation and color uniform bind group layout",
       entries: [
         {
@@ -136,28 +82,9 @@ export class Renderer {
       ],
     });
 
-    this.bindGroup = device.createBindGroup({
-      label: "Rotation uniform group",
-      layout: bindGroupLayout,
-      entries: [
-        {
-          binding: 0,
-          resource: { buffer: this.uniformBuffer },
-        },
-        {
-          binding: 1,
-          resource: { buffer: this.colorBuffer },
-        },
-        {
-          binding: 2,
-          resource: this.colorTexture.createView(),
-        },
-      ],
-    });
-
     const pipelineLayout = device.createPipelineLayout({
       label: "Rotation uniform pipeline layout",
-      bindGroupLayouts: [bindGroupLayout],
+      bindGroupLayouts: [this.bindGroupLayout],
     });
 
     const edgeShaderModule = device.createShaderModule({
@@ -165,11 +92,11 @@ export class Renderer {
       code: EDGE_SHADER,
     });
 
-    const edgePipeline = device.createRenderPipeline({
+    this.linePipeline = device.createRenderPipeline({
       label: "Edge pipeline",
       layout: pipelineLayout,
       primitive: { topology: "line-list" },
-      depthStencil: Renderer.#depthStencil,
+      depthStencil: DEPTH_STENCIL,
       vertex: {
         module: edgeShaderModule,
         entryPoint: "vertexMain",
@@ -203,7 +130,7 @@ export class Renderer {
       layout: pipelineLayout,
       primitive: { cullMode: "back" },
       depthStencil: {
-        ...Renderer.#depthStencil,
+        ...DEPTH_STENCIL,
         // Push triangles backwards slightly
         // so that edges are rendered above faces
         depthBias: -1,
@@ -253,12 +180,12 @@ export class Renderer {
       },
     };
 
-    const opaqueTriangePipeline = device.createRenderPipeline({
+    this.opaqueTrianglePipeline = device.createRenderPipeline({
       ...trianglePipelineDescriptor,
       label: "Opaque triangle render pipeline",
     });
 
-    const transparentTriangePipeline = device.createRenderPipeline({
+    this.transparentTrianglePipeline = device.createRenderPipeline({
       ...trianglePipelineDescriptor,
       label: "Transparent triangle pipeline",
       depthStencil: {
@@ -274,15 +201,43 @@ export class Renderer {
       code: OPTIONAL_LINE_SHADER,
     });
 
-    const optionalLinePipeline = device.createRenderPipeline({
+    this.optionalLinePipeline = device.createRenderPipeline({
       label: "Optional line pipeline",
       layout: pipelineLayout,
       primitive: { topology: "line-list" },
-      depthStencil: Renderer.#depthStencil,
+      depthStencil: DEPTH_STENCIL,
       vertex: {
         module: optionalLineShaderModule,
         entryPoint: "vertexMain",
-        buffers: [Renderer.#optionalLineBufferLayout],
+        buffers: [
+          {
+            // Instance buffer: 4 vec3f points (p1, p2, c1, c2) = 12 floats
+            arrayStride: 12 * 4,
+            stepMode: "instance",
+            attributes: [
+              {
+                format: "float32x3",
+                offset: 0,
+                shaderLocation: 0, // point 1
+              },
+              {
+                format: "float32x3",
+                offset: 12,
+                shaderLocation: 1, // point 2
+              },
+              {
+                format: "float32x3",
+                offset: 24,
+                shaderLocation: 2, // control point 1
+              },
+              {
+                format: "float32x3",
+                offset: 36,
+                shaderLocation: 3, // control point 2
+              },
+            ],
+          },
+        ],
       },
       fragment: {
         module: optionalLineShaderModule,
@@ -290,87 +245,72 @@ export class Renderer {
         targets: [{ format }],
       },
     });
-
-    const {
-      lines,
-      opaqueTriangles,
-      transparentTriangles,
-      optionalLines,
-      viewBox,
-      center,
-    } = this.renderPart(part);
-
-    this.viewBox = viewBox;
-    this.center = center;
-
-    const edgeVertexBuffer = this.device.createBuffer({
-      size: lines.byteLength,
-      usage: GPUBufferUsage.COPY_DST | GPUBufferUsage.VERTEX,
-    });
-    this.device.queue.writeBuffer(edgeVertexBuffer, 0, lines);
-    this.edgeRender = {
-      count: lines.length / 3,
-      vertexBuffer: edgeVertexBuffer,
-      pipeline: edgePipeline,
-    };
-
-    const opaqueTriangleVertexBuffer = this.device.createBuffer({
-      size: opaqueTriangles.byteLength,
-      usage: GPUBufferUsage.COPY_DST | GPUBufferUsage.VERTEX,
-    });
-    this.device.queue.writeBuffer(
-      opaqueTriangleVertexBuffer,
-      0,
-      opaqueTriangles
-    );
-    this.opaqueTriangleRender = {
-      count: opaqueTriangles.length / 4,
-      vertexBuffer: opaqueTriangleVertexBuffer,
-      pipeline: opaqueTriangePipeline,
-    };
-
-    const transparentTriangleVertexBuffer = this.device.createBuffer({
-      size: transparentTriangles.byteLength,
-      usage: GPUBufferUsage.COPY_DST | GPUBufferUsage.VERTEX,
-    });
-    this.device.queue.writeBuffer(
-      transparentTriangleVertexBuffer,
-      0,
-      transparentTriangles
-    );
-    this.transparentTriangleRender = {
-      count: transparentTriangles.length / 4,
-      vertexBuffer: transparentTriangleVertexBuffer,
-      pipeline: transparentTriangePipeline,
-    };
-
-    this.optionalLineRender = {
-      count: optionalLines.length / 12, // 4 points × 3 coords = 12 per line
-      vertexBuffer: this.device.createBuffer({
-        size: optionalLines.byteLength,
-        usage: GPUBufferUsage.COPY_DST | GPUBufferUsage.VERTEX,
-      }),
-      pipeline: optionalLinePipeline,
-    };
-
-    this.device.queue.writeBuffer(
-      this.optionalLineRender.vertexBuffer,
-      0,
-      optionalLines
-    );
   }
 
   /**
-   * @param {Part} part
-   * @returns
+   * @param {GPUBuffer} uniformBuffer
+   * @param {GPUBuffer} colorBuffer
    */
-  renderPart(part) {
-    const {
-      lines: rawLines,
-      triangles: rawTriangles,
-      largestExtent,
-      center,
-    } = part.render();
+  createBindGroup(uniformBuffer, colorBuffer) {
+    return this.device.createBindGroup({
+      label: "Rotation uniform group",
+      layout: this.bindGroupLayout,
+      entries: [
+        {
+          binding: 0,
+          resource: { buffer: uniformBuffer },
+        },
+        {
+          binding: 1,
+          resource: { buffer: colorBuffer },
+        },
+        {
+          binding: 2,
+          resource: this.colorTexture.createView(),
+        },
+      ],
+    });
+  }
+
+  /**
+   * @param {Colors} colors
+   */
+  static async create(colors) {
+    const adapter = await navigator.gpu.requestAdapter();
+    if (!adapter) {
+      throw new Error("No appropriate GPUAdapter found.");
+    }
+
+    const device = await adapter.requestDevice();
+
+    const format = navigator.gpu.getPreferredCanvasFormat();
+
+    return new GpuRenderer(device, format, colors);
+  }
+}
+
+class PartGeometry {
+  #part;
+
+  #gpu;
+
+  #lines;
+
+  #optionalLines;
+
+  #opaqueTriangles;
+
+  #transparentTriangles;
+
+  /**
+   * @param {GpuRenderer} gpu
+   * @param {Part} part
+   */
+  constructor(gpu, part) {
+    this.#gpu = gpu;
+    this.#part = part;
+
+    const { lines: rawLines, triangles: rawTriangles } = this.#part.render();
 
     /** @type {number[]} */
     const lines = [];
@@ -394,21 +334,158 @@ export class Renderer {
     }
 
     for (const { vertices, color: colorCode } of rawTriangles) {
-      const color = this.colors.for(colorCode);
+      const color = this.#gpu.colors.for(colorCode);
       const array = color?.opaque ? opaqueTriangles : transparentTriangles;
       for (const vertex of vertices) {
         array.push(...vertex, colorCode ?? -1);
       }
     }
 
-    return {
-      lines: new Float32Array(lines),
-      optionalLines: new Float32Array(optionalLines),
-      opaqueTriangles: new Float32Array(opaqueTriangles),
-      transparentTriangles: new Float32Array(transparentTriangles),
-      viewBox: largestExtent / 2,
-      center,
-    };
+    this.#lines = this.#loadGeometry(
+      new Float32Array(lines),
+      3,
+      gpu.linePipeline
+    );
+
+    this.#optionalLines = this.#loadGeometry(
+      new Float32Array(optionalLines),
+      12,
+      gpu.optionalLinePipeline
+    );
+
+    this.#opaqueTriangles = this.#loadGeometry(
+      new Float32Array(opaqueTriangles),
+      4,
+      gpu.opaqueTrianglePipeline
+    );
+
+    this.#transparentTriangles = this.#loadGeometry(
+      new Float32Array(transparentTriangles),
+      4,
+      gpu.transparentTrianglePipeline
+    );
+  }
+
+  /**
+   * @param {GPURenderPassEncoder} pass
+   */
+  render(pass) {
+    this.#render(pass, this.#opaqueTriangles);
+    this.#render(pass, this.#lines);
+    this.#renderOptionalLines(pass);
+    this.#render(pass, this.#transparentTriangles);
+  }
+
+  /**
+   * @param {Transform} transform
+   */
+  transformMatrix(transform) {
+    return this.#part.transformMatrix(transform);
+  }
+
+  /**
+   *
+   * @param {Float32Array<ArrayBuffer>} data
+   * @param {number} itemSize
+   * @param {GPURenderPipeline} pipeline
+   * @returns
+   */
+  #loadGeometry(data, itemSize, pipeline) {
+    const buffer = this.#gpu.device.createBuffer({
+      size: data.byteLength,
+      usage: GPUBufferUsage.COPY_DST | GPUBufferUsage.VERTEX,
+    });
+    this.#gpu.device.queue.writeBuffer(buffer, 0, data);
+
+    return { buffer, pipeline, count: data.length / itemSize };
+  }
+
+  /**
+   * @param {GPURenderPassEncoder} pass
+   */
+  #renderOptionalLines(pass) {
+    if (this.#optionalLines.count === 0) {
+      return;
+    }
+
+    pass.setPipeline(this.#optionalLines.pipeline);
+    pass.setVertexBuffer(0, this.#optionalLines.buffer);
+    pass.draw(2, this.#optionalLines.count);
+  }
+
+  /**
+   * @param {GPURenderPassEncoder} pass
+   * @param {{ pipeline: GPURenderPipeline, buffer: GPUBuffer, count: number }} geometry
+   */
+  #render(pass, geometry) {
+    if (geometry.count === 0) {
+      return;
+    }
+
+    pass.setPipeline(geometry.pipeline);
+    pass.setVertexBuffer(0, geometry.buffer);
+    pass.draw(geometry.count);
+  }
+}
+
+class CanvasRenderer {
+  /**
+   * @param {GpuRenderer} gpu
+   * @param {HTMLCanvasElement} canvas
+   */
+  constructor(gpu, canvas) {
+    this.gpu = gpu;
+
+    // Smoother lines on high resolution displays
+    const devicePixelRatio = window.devicePixelRatio;
+    canvas.width = canvas.clientWidth * devicePixelRatio;
+    canvas.height = canvas.clientHeight * devicePixelRatio;
+
+    this.context = this.#getContext(canvas);
+
+    this.context.configure({
+      device: gpu.device,
+      format: gpu.format,
+      alphaMode: "premultiplied",
+    });
+
+    this.colorBuffer = this.gpu.device.createBuffer({
+      label: "Default color",
+      size: 4 * 4,
+      usage: GPUBufferUsage.COPY_DST | GPUBufferUsage.UNIFORM,
+    });
+
+    this.uniformBuffer = this.gpu.device.createBuffer({
+      label: "Rotation matrix",
+      size: 16 * 4,
+      usage: GPUBufferUsage.COPY_DST | GPUBufferUsage.UNIFORM,
+    });
+
+    this.bindGroup = this.gpu.createBindGroup(
+      this.uniformBuffer,
+      this.colorBuffer
+    );
+  }
+
+  /**
+   * @param {HTMLCanvasElement} canvas
+   */
+  #getContext(canvas) {
+    const context = canvas.getContext("webgpu");
+    if (!context) {
+      throw new Error("Could not get canvas webgpu context");
+    }
+    return context;
+  }
+
+  /**
+   * @param {PartGeometry | Part} geometry
+   */
+  load(geometry) {
+    this.geometry =
+      geometry instanceof PartGeometry
+        ? geometry
+        : new PartGeometry(this.gpu, geometry);
   }
 
   /**
@@ -416,22 +493,29 @@ export class Renderer {
    * @param {Transform} transform
    */
   render(color, transform) {
-    const transformMatrix = this.#transformMatrix(transform);
-    this.device.queue.writeBuffer(this.uniformBuffer, 0, transformMatrix);
+    if (!this.geometry) {
+      throw new Error("Need to load a part first!");
+    }
 
-    this.device.queue.writeBuffer(
-      this.colorBuffer,
+    const device = this.gpu.device;
+
+    const transformMatrix = this.geometry.transformMatrix(transform);
+
+    device.queue.writeBuffer(
+      this.uniformBuffer,
       0,
-      new Float32Array(color.rgba)
+      new Float32Array(transformMatrix)
     );
 
-    const encoder = this.device.createCommandEncoder();
+    device.queue.writeBuffer(this.colorBuffer, 0, new Float32Array(color.rgba));
+
+    const encoder = device.createCommandEncoder();
 
     const canvasTexture = this.context.getCurrentTexture();
     const canvasTextureView = canvasTexture.createView();
-    const depthTexture = this.device.createTexture({
+    const depthTexture = device.createTexture({
       size: [canvasTexture.width, canvasTexture.height],
-      format: Renderer.#depthStencil.format,
+      format: DEPTH_STENCIL.format,
       usage: GPUTextureUsage.RENDER_ATTACHMENT,
     });
 
@@ -455,73 +539,13 @@ export class Renderer {
 
     pass.setBindGroup(0, this.bindGroup);
 
-    if (this.opaqueTriangleRender.count > 0) {
-      pass.setPipeline(this.opaqueTriangleRender.pipeline);
-      pass.setVertexBuffer(0, this.opaqueTriangleRender.vertexBuffer);
-      pass.draw(this.opaqueTriangleRender.count);
-    }
-
-    pass.setPipeline(this.edgeRender.pipeline);
-    pass.setVertexBuffer(0, this.edgeRender.vertexBuffer);
-    pass.draw(this.edgeRender.count);
-
-    // Render optional lines
-    pass.setPipeline(this.optionalLineRender.pipeline);
-    pass.setVertexBuffer(0, this.optionalLineRender.vertexBuffer);
-    pass.draw(2, this.optionalLineRender.count);
-
-    if (this.transparentTriangleRender.count > 0) {
-      pass.setPipeline(this.transparentTriangleRender.pipeline);
-      pass.setVertexBuffer(0, this.transparentTriangleRender.vertexBuffer);
-      pass.draw(this.transparentTriangleRender.count);
-    }
+    this.geometry.render(pass);
 
     pass.end();
 
-    this.device.queue.submit([encoder.finish()]);
-  }
-
-  /**
-   * @param {Transform} transform
-   *
-   * @returns {Float32Array<ArrayBuffer>}
-   */
-  #transformMatrix(transform) {
-    return new Float32Array(
-      matrix.transform(
-        [
-          matrix.orthographic(
-            -this.viewBox,
-            this.viewBox,
-            -this.viewBox,
-            this.viewBox,
-            -(this.viewBox * 2),
-            this.viewBox * 2
-          ),
-          matrix.fromRotationX(transform.rotateX),
-          matrix.fromRotationY(transform.rotateY),
-          matrix.fromRotationZ(transform.rotateZ),
-          matrix.fromScaling(transform.scale),
-          matrix.fromTranslation(
-            -this.center[0],
-            -this.center[1],
-            -this.center[2]
-          ),
-        ],
-        matrix.identity
-      )
-    );
+    device.queue.submit([encoder.finish()]);
   }
 }
-
-/**
- * @typedef {{
- *   rotateX: number;
- *   rotateY: number;
- *   rotateZ: number;
- *   scale: number;
- * }} Transform
- */
 
 /**
  * @typedef {{
