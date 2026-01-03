@@ -1,7 +1,6 @@
 import { Color } from "./ldraw.js";
-import { PartDb } from "./part-db.js";
-import { ConfigurationLoader, FileLoader, PartLoader } from "./part-loader.js";
 import { CanvasRenderer, GpuRenderer } from "./renderer.js";
+import { PartLoader } from "./part-loader-worker.js";
 
 const styleSheet = new CSSStyleSheet();
 styleSheet.replaceSync(`
@@ -107,7 +106,7 @@ styleSheet.replaceSync(`
   }
 `);
 
-const { partLoader, gpuRenderer } = await setup();
+const { gpuRenderer, partGeometryLoader } = await setup();
 
 export class BrickRenderer extends HTMLElement {
   static #FILE_ATTRIBUTE = "file";
@@ -154,8 +153,9 @@ export class BrickRenderer extends HTMLElement {
       passive: true,
     });
 
-    // this.renderer = WorkerRenderer.attach(this.canvas);
     this.renderer = gpuRenderer.to(this.canvas);
+
+    this.partLoader = partGeometryLoader;
 
     this.form = this.#createForm();
 
@@ -238,9 +238,8 @@ export class BrickRenderer extends HTMLElement {
    * @param {string} fileName
    */
   async load(fileName) {
-    const part = await partLoader.load(fileName);
-
-    await this.renderer.load(part);
+    const geometry = await this.partLoader.load(fileName);
+    this.renderer.load(geometry);
     this.#partLoaded = true;
   }
 
@@ -313,36 +312,14 @@ export class BrickRenderer extends HTMLElement {
   }
 }
 
-/**
- * @param {string} fileName
- * @param {string[]} paths
- */
-async function fetchPart(fileName, paths) {
-  return Promise.any(
-    paths.map(async function (path) {
-      const response = await fetch(path);
-
-      if (!response.ok) {
-        throw new Error(`Could not load ${path}: ${response.status}`);
-      }
-
-      return response.text();
-    })
-  );
-}
-
 async function setup() {
-  const partDb = await PartDb.open();
+  const partGeometryLoader = new PartLoader();
 
-  const fileLoader = new FileLoader(fetchPart, partDb);
+  const colors = await partGeometryLoader.loadColors();
 
-  const configuration = await new ConfigurationLoader(fileLoader).load();
+  const gpuRenderer = await GpuRenderer.create(colors);
 
-  const partLoader = new PartLoader(fileLoader);
-
-  const gpuRenderer = await GpuRenderer.create(configuration.colors);
-
-  return { partLoader, gpuRenderer };
+  return { gpuRenderer, partGeometryLoader };
 }
 
 customElements.define("brick-renderer", BrickRenderer);

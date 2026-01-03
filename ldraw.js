@@ -2,6 +2,9 @@
 import * as matrix from "./matrix.js";
 
 export class Part {
+  /** @type {RenderedPart | undefined} */
+  #cachedRender;
+
   /**
    *
    * @param {File} file
@@ -10,59 +13,31 @@ export class Part {
   constructor(file, subParts) {
     this.file = file;
     this.subParts = new Map(subParts.map((p) => [p.file.name, p]));
-    this.viewBox = 1;
-    this.center = [0, 0, 0];
   }
 
   /**
-   * @param {Transform} transform
-   *
-   * @returns {Matrix}
+   * @returns {RenderedPart}
    */
-  transformMatrix(transform) {
-    return matrix.transform(
-      [
-        matrix.orthographic(
-          -this.viewBox,
-          this.viewBox,
-          -this.viewBox,
-          this.viewBox,
-          -(this.viewBox * 5),
-          this.viewBox * 5
-        ),
-        matrix.fromScaling(transform.scale),
-        matrix.fromRotationX(transform.rotateX),
-        matrix.fromRotationY(transform.rotateY),
-        matrix.fromRotationZ(transform.rotateZ),
-        // matrix.fromScaling(transform.scale),
-        matrix.fromTranslation(
-          -this.center[0],
-          -this.center[1],
-          -this.center[2]
-        ),
-      ],
-      matrix.identity
-    );
-  }
+  render() {
+    if (this.#cachedRender) {
+      return this.#cachedRender;
+    }
 
-  /**
-   * @param {Partial<RenderArgs>} [args]
-   */
-  render(args) {
-    const renderArgs = {
-      color: args?.color ?? null,
-      transformation: args?.transformation,
-      invert: args?.invert ?? false,
+    const renderResult = this.#render({}, EmptyRenderResult());
+
+    const { largestExtent, center } = Part.#boundingBox(renderResult.lines);
+
+    const viewBox = largestExtent / 2;
+
+    const renderedPart = {
+      ...renderResult,
+      viewBox,
+      center,
     };
 
-    const { lines, triangles } = this.#render(renderArgs, EmptyRenderResult());
+    this.#cachedRender = renderedPart;
 
-    const { largestExtent, center } = Part.#boundingBox(lines);
-
-    this.viewBox = largestExtent / 2;
-    this.center = center;
-
-    return { lines, triangles };
+    return renderedPart;
   }
 
   /**
@@ -112,6 +87,7 @@ export class Part {
       }
     }
 
+    /** @type {[number, number, number]} */
     const center = [
       (min[0] + max[0]) / 2,
       (min[1] + max[1]) / 2,
@@ -155,6 +131,13 @@ export class Part {
  *   lines: RenderLine[];
  *   triangles: { vertices: Triangle; color: number | null }[];
  * }} Geometry
+ *
+ * @typedef {{
+ *   viewBox: number;
+ *   center: [number, number, number]
+ * }} Dimensions
+ *
+ * @typedef {Geometry & Dimensions} RenderedPart
  */
 
 /**

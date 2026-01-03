@@ -1,5 +1,7 @@
-/** @import {Transform} from "./ldraw.js" */
-import { Color, Colors, Part } from "./ldraw.js";
+/** @import { Transform } from "./ldraw.js" */
+/** @import { PartGeometry } from "./part-geometry.js"  */
+import { Color, Colors } from "./ldraw.js";
+import { transformMatrix } from "./part-geometry.js";
 
 /** @satisfies {GPUDepthStencilState} */
 const DEPTH_STENCIL = {
@@ -9,6 +11,14 @@ const DEPTH_STENCIL = {
 };
 
 export class GpuRenderer {
+  #linePipeline;
+
+  #optionalLinePipeline;
+
+  #opaqueTrianglePipeline;
+
+  #transparentTrianglePipeline;
+
   /**
    * @param {HTMLCanvasElement | OffscreenCanvas} canvas
    */
@@ -17,10 +27,86 @@ export class GpuRenderer {
   }
 
   /**
-   * @param {Part} part
+   * @param {PartGeometry} geometry
    */
-  load(part) {
-    return new PartGeometry(this, part);
+  prepareGeometry(geometry) {
+    const lines = this.#loadGeometry(
+      new Float32Array(geometry.lines),
+      3,
+      this.#linePipeline
+    );
+
+    const optionalLines = this.#loadGeometry(
+      new Float32Array(geometry.optionalLines),
+      12,
+      this.#optionalLinePipeline
+    );
+
+    const opaqueTriangles = this.#loadGeometry(
+      new Float32Array(geometry.opaqueTriangles),
+      4,
+      this.#opaqueTrianglePipeline
+    );
+
+    const transparentTriangles = this.#loadGeometry(
+      new Float32Array(geometry.transparentTriangles),
+      4,
+      this.#transparentTrianglePipeline
+    );
+
+    /**
+     * @param {GPURenderPassEncoder} pass
+     */
+    function renderOptionalLines(pass) {
+      if (optionalLines.count === 0) {
+        return;
+      }
+
+      pass.setPipeline(optionalLines.pipeline);
+      pass.setVertexBuffer(0, optionalLines.buffer);
+      pass.draw(2, optionalLines.count);
+    }
+
+    /**
+     * @param {GPURenderPassEncoder} pass
+     * @param {{ pipeline: GPURenderPipeline, buffer: GPUBuffer, count: number }} geometry
+     */
+    function render(pass, geometry) {
+      if (geometry.count === 0) {
+        return;
+      }
+
+      pass.setPipeline(geometry.pipeline);
+      pass.setVertexBuffer(0, geometry.buffer);
+      pass.draw(geometry.count);
+    }
+
+    /**
+     * @param {GPURenderPassEncoder} pass
+     */
+    return function (pass) {
+      render(pass, opaqueTriangles);
+      render(pass, lines);
+      renderOptionalLines(pass);
+      render(pass, transparentTriangles);
+    };
+  }
+
+  /**
+   *
+   * @param {Float32Array<ArrayBuffer>} data
+   * @param {number} itemSize
+   * @param {GPURenderPipeline} pipeline
+   * @returns
+   */
+  #loadGeometry(data, itemSize, pipeline) {
+    const buffer = this.device.createBuffer({
+      size: data.byteLength,
+      usage: GPUBufferUsage.COPY_DST | GPUBufferUsage.VERTEX,
+    });
+    this.device.queue.writeBuffer(buffer, 0, data);
+
+    return { buffer, pipeline, count: data.length / itemSize };
   }
 
   /**
@@ -92,7 +178,7 @@ export class GpuRenderer {
       code: EDGE_SHADER,
     });
 
-    this.linePipeline = device.createRenderPipeline({
+    this.#linePipeline = device.createRenderPipeline({
       label: "Edge pipeline",
       layout: pipelineLayout,
       primitive: { topology: "line-list" },
@@ -180,12 +266,12 @@ export class GpuRenderer {
       },
     };
 
-    this.opaqueTrianglePipeline = device.createRenderPipeline({
+    this.#opaqueTrianglePipeline = device.createRenderPipeline({
       ...trianglePipelineDescriptor,
       label: "Opaque triangle render pipeline",
     });
 
-    this.transparentTrianglePipeline = device.createRenderPipeline({
+    this.#transparentTrianglePipeline = device.createRenderPipeline({
       ...trianglePipelineDescriptor,
       label: "Transparent triangle pipeline",
       depthStencil: {
@@ -201,7 +287,7 @@ export class GpuRenderer {
       code: OPTIONAL_LINE_SHADER,
     });
 
-    this.optionalLinePipeline = device.createRenderPipeline({
+    this.#optionalLinePipeline = device.createRenderPipeline({
       label: "Optional line pipeline",
       layout: pipelineLayout,
       primitive: { topology: "line-list" },
@@ -289,145 +375,6 @@ export class GpuRenderer {
   }
 }
 
-class PartGeometry {
-  #part;
-
-  #gpu;
-
-  #lines;
-
-  #optionalLines;
-
-  #opaqueTriangles;
-
-  #transparentTriangles;
-
-  /**
-   * @param {GpuRenderer} gpu
-   * @param {Part} part
-   */
-  constructor(gpu, part) {
-    this.#gpu = gpu;
-    this.#part = part;
-
-    const { lines: rawLines, triangles: rawTriangles } = this.#part.render();
-
-    /** @type {number[]} */
-    const lines = [];
-
-    /** @type {number[]} */
-    const optionalLines = [];
-
-    /** @type {number[]} */
-    const opaqueTriangles = [];
-
-    /** @type {number[]} */
-    const transparentTriangles = [];
-
-    for (const line of rawLines) {
-      const points = line.points.flat();
-      if (line.controlPoints) {
-        optionalLines.push(...points, ...line.controlPoints.flat());
-      } else {
-        lines.push(...points);
-      }
-    }
-
-    for (const { vertices, color: colorCode } of rawTriangles) {
-      const color = this.#gpu.colors.for(colorCode);
-      const array = color?.opaque ? opaqueTriangles : transparentTriangles;
-      for (const vertex of vertices) {
-        array.push(...vertex, colorCode ?? -1);
-      }
-    }
-
-    this.#lines = this.#loadGeometry(
-      new Float32Array(lines),
-      3,
-      gpu.linePipeline
-    );
-
-    this.#optionalLines = this.#loadGeometry(
-      new Float32Array(optionalLines),
-      12,
-      gpu.optionalLinePipeline
-    );
-
-    this.#opaqueTriangles = this.#loadGeometry(
-      new Float32Array(opaqueTriangles),
-      4,
-      gpu.opaqueTrianglePipeline
-    );
-
-    this.#transparentTriangles = this.#loadGeometry(
-      new Float32Array(transparentTriangles),
-      4,
-      gpu.transparentTrianglePipeline
-    );
-  }
-
-  /**
-   * @param {GPURenderPassEncoder} pass
-   */
-  render(pass) {
-    this.#render(pass, this.#opaqueTriangles);
-    this.#render(pass, this.#lines);
-    this.#renderOptionalLines(pass);
-    this.#render(pass, this.#transparentTriangles);
-  }
-
-  /**
-   * @param {Transform} transform
-   */
-  transformMatrix(transform) {
-    return this.#part.transformMatrix(transform);
-  }
-
-  /**
-   *
-   * @param {Float32Array<ArrayBuffer>} data
-   * @param {number} itemSize
-   * @param {GPURenderPipeline} pipeline
-   * @returns
-   */
-  #loadGeometry(data, itemSize, pipeline) {
-    const buffer = this.#gpu.device.createBuffer({
-      size: data.byteLength,
-      usage: GPUBufferUsage.COPY_DST | GPUBufferUsage.VERTEX,
-    });
-    this.#gpu.device.queue.writeBuffer(buffer, 0, data);
-
-    return { buffer, pipeline, count: data.length / itemSize };
-  }
-
-  /**
-   * @param {GPURenderPassEncoder} pass
-   */
-  #renderOptionalLines(pass) {
-    if (this.#optionalLines.count === 0) {
-      return;
-    }
-
-    pass.setPipeline(this.#optionalLines.pipeline);
-    pass.setVertexBuffer(0, this.#optionalLines.buffer);
-    pass.draw(2, this.#optionalLines.count);
-  }
-
-  /**
-   * @param {GPURenderPassEncoder} pass
-   * @param {{ pipeline: GPURenderPipeline, buffer: GPUBuffer, count: number }} geometry
-   */
-  #render(pass, geometry) {
-    if (geometry.count === 0) {
-      return;
-    }
-
-    pass.setPipeline(geometry.pipeline);
-    pass.setVertexBuffer(0, geometry.buffer);
-    pass.draw(geometry.count);
-  }
-}
-
 export class CanvasRenderer {
   /**
    * @param {GpuRenderer} gpu
@@ -480,13 +427,11 @@ export class CanvasRenderer {
   }
 
   /**
-   * @param {PartGeometry | Part} geometry
+   * @param {PartGeometry} geometry
    */
   load(geometry) {
-    this.geometry =
-      geometry instanceof PartGeometry
-        ? geometry
-        : new PartGeometry(this.gpu, geometry);
+    this.geometry = geometry;
+    this.renderGeometry = this.gpu.prepareGeometry(geometry);
   }
 
   /**
@@ -512,12 +457,16 @@ export class CanvasRenderer {
    * @param {PartGeometry} geometry
    */
   #render(color, transform, device, geometry) {
-    const transformMatrix = geometry.transformMatrix(transform);
+    if (!this.renderGeometry) {
+      return;
+    }
+
+    const transformedMatrix = transformMatrix(geometry, transform);
 
     device.queue.writeBuffer(
       this.uniformBuffer,
       0,
-      new Float32Array(transformMatrix)
+      new Float32Array(transformedMatrix)
     );
 
     device.queue.writeBuffer(this.colorBuffer, 0, new Float32Array(color.rgba));
@@ -547,7 +496,7 @@ export class CanvasRenderer {
 
     pass.setBindGroup(0, this.bindGroup);
 
-    geometry.render(pass);
+    this.renderGeometry(pass);
 
     pass.end();
 
