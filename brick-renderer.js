@@ -2,23 +2,117 @@ import { WorkerRenderer } from "./worker-renderer.js";
 
 const styleSheet = new CSSStyleSheet();
 styleSheet.replaceSync(`
+  :host {
+    position: relative;
+    display: inline-block;
+
+    --canvas-size: 512px;
+
+    --canvas-radius: 30px;
+    --canvas-padding: 0.125lh;
+    --button-radius: calc(var(--canvas-radius) - var(--canvas-padding));
+
+    line-height: calc(var(--canvas-size) / 8);
+  }
+
   canvas {
-    inline-size: 512px;
+    inline-size: var(--canvas-size);
     aspect-ratio: 1;
-    border-radius: 20px;
+    border-radius: 30px;
     background-color: hsl(227, 70%, 59%);
     background-size: 12.5% 12.5%;
     background-image:
       linear-gradient(to right, #fff2 1px, transparent 1px),
       linear-gradient(to bottom, #fff2 1px, transparent 1px);
-    overflow: auto;
+  }
+
+  form {
+    position: absolute;
+    inset-block-end: 0;
+    inset-inline-start: 0;
+    inset-inline-end: 0;
+    padding: var(--canvas-padding);
+
+    display: flex;
+    align-items: start;
+    justify-content: space-between;
+  }
+
+  button[type="reset"] {
+    font: inherit;
+    background: #fff5;
+    user-select: none;
+    appearance: none;
+    border: none;
+    padding: 0.125lh;
+    color: white;
+    border-radius: 200px;
+    backdrop-filter: blur(5px);
+
+    display: flex;
+    align-items: start;
+    justify-content: center;
+
+    block-size: 0.75lh;
+    inline-size: 1.75lh;
+
+    svg {
+      block-size: 100%;
+      aspect-ratio: 1;
+    }
+  }
+
+  input[type="range"] {
+    appearance: none;
+
+    margin: 0;
+
+    font: inherit;
+
+    cursor: pointer;
+    background: #fff5;
+    border-radius: var(--button-radius);
+    backdrop-filter: blur(5px);
+
+    box-sizing: border-box;
+    inline-size: 5.75lh;
+    block-size: 0.75lh;
+
+    padding: 0.125lh;
+
+    &::-webkit-slider-thumb {
+      appearance: none;
+      padding: 0;
+      margin: 0;
+      border-radius: calc(var(--button-radius) - 5px);
+      block-size: 0.5lh;
+      aspect-ratio: 1;
+      background: #ffffff;
+    }
+
+    &::-moz-range-thumb {
+      appearance: none;
+      box-shadow: none;
+      border: none;
+      padding: 0;
+      margin: 0;
+      border-radius: calc(var(--button-radius) - 5px);
+      block-size: 0.5lh;
+      inline-size: 0.5lh;
+      background: #ffffff;
+    }
   }
 `);
 
 export class BrickRenderer extends HTMLElement {
   static #FILE_ATTRIBUTE = "file";
 
-  static observedAttributes = [BrickRenderer.#FILE_ATTRIBUTE];
+  static #COLOR_ATTRIBUTE = "color";
+
+  static observedAttributes = [
+    BrickRenderer.#FILE_ATTRIBUTE,
+    BrickRenderer.#COLOR_ATTRIBUTE,
+  ];
 
   static #INITIAL_TRANSFORM = {
     rotateX: 60,
@@ -35,7 +129,9 @@ export class BrickRenderer extends HTMLElement {
   constructor() {
     super();
 
-    this.color = BrickRenderer.#INITIAL_COLOR;
+    this.color =
+      this.getAttribute(BrickRenderer.#COLOR_ATTRIBUTE) ??
+      BrickRenderer.#INITIAL_COLOR;
     this.transform = BrickRenderer.#INITIAL_TRANSFORM;
 
     const shadow = this.attachShadow({ mode: "open" });
@@ -84,6 +180,10 @@ export class BrickRenderer extends HTMLElement {
         await this.load(newValue);
         break;
       }
+      case BrickRenderer.#COLOR_ATTRIBUTE: {
+        this.color = newValue;
+        break;
+      }
     }
 
     await this.update();
@@ -121,7 +221,6 @@ export class BrickRenderer extends HTMLElement {
 
   async reset() {
     this.transform = BrickRenderer.#INITIAL_TRANSFORM;
-    this.color = BrickRenderer.#INITIAL_COLOR;
     await this.update();
   }
 
@@ -140,13 +239,10 @@ export class BrickRenderer extends HTMLElement {
     const data = new FormData(form);
     const scale = Number.parseFloat(data.get("scale")?.toString() ?? "0");
 
-    const transform = {
+    return {
       ...this.transform,
       scale,
     };
-
-    const color = data.get("color")?.toString() ?? this.color;
-    return { color, transform };
   }
 
   createForm() {
@@ -156,29 +252,23 @@ export class BrickRenderer extends HTMLElement {
       "Scale",
       "scale",
       "0.6",
-      "0.01",
-      "2",
-      "0.1"
+      "0.1",
+      "5",
+      "0.01"
     );
 
-    const colorLabel = document.createElement("label");
-    colorLabel.textContent = "Color";
-    const colorInput = document.createElement("input");
-    colorInput.type = "color";
-    colorInput.name = "color";
-    colorInput.defaultValue = this.color;
-    colorLabel.appendChild(colorInput);
-
     const reset = document.createElement("button");
-    reset.textContent = "Reset";
+    reset.ariaLabel = "Reset";
     reset.type = "reset";
 
-    form.append(scale, colorLabel, reset);
+    const icon = this.resetSvg();
+
+    reset.appendChild(icon);
+
+    form.append(scale, reset);
 
     const update = () => {
-      const { color, transform } = this.inputs(form);
-      this.color = color;
-      this.transform = transform;
+      this.transform = this.inputs(form);
       this.update();
     };
 
@@ -198,18 +288,69 @@ export class BrickRenderer extends HTMLElement {
    */
   createSlider(labelText, name, value, min, max, step = "1") {
     const label = document.createElement("label");
-    label.textContent = labelText;
+    label.ariaLabel = labelText;
     const input = document.createElement("input");
     input.type = "range";
     input.name = name;
+    input.step = step;
     input.min = min;
     input.max = max;
-    input.step = step;
     input.defaultValue = value;
 
     label.appendChild(input);
 
     return label;
+  }
+
+  /*
+svg
+        [ viewBox "0 0 60 60"
+        ]
+        [ g
+            []
+            [ Svg.Styled.path
+                [ fill "currentColor"
+                , d
+                    ("M 8,33"
+                        ++ "A 22,22 0 1,0 30,13"
+                        ++ "h -4"
+                        ++ "l 10,-10"
+                        ++ "h -5"
+                        ++ "l -11,11"
+                        ++ "h 1.75"
+                        ++ "v -1"
+                        ++ "a 2,2 0 0,0 0,4"
+                        ++ "v -1"
+                        ++ "h -1.75"
+                        ++ "l 11,11"
+                        ++ "h 5"
+                        ++ "l -10,-10"
+                        ++ "h 4"
+                        ++ "A 18,18 0 1,1 12,33"
+                        ++ "a 2,2 0 1,0 -4,0"
+                        ++ "z"
+                    )
+                ]
+                []
+            ]
+        ]
+  */
+
+  resetSvg() {
+    const svg = document.createElementNS("http://www.w3.org/2000/svg", "svg");
+    svg.setAttribute("viewBox", "0 0 60 60");
+    const path = document.createElementNS("http://www.w3.org/2000/svg", "path");
+    path.setAttribute("fill", "currentColor");
+    path.setAttribute(
+      "d",
+      `
+      M 8,33 A 22,22 0 1,0 30,13 h -4 l 10,-10 h -5 l -11,11 h 1.75 v -1 a 2,2 0 0,0 0,4 v -1 h -1.75 l 11,11 h 5 l -10,-10 h 4 A 18,18 0 1,1 12,33 a 2,2 0 1,0 -4,0 z
+    `
+    );
+
+    svg.appendChild(path);
+
+    return svg;
   }
 }
 
