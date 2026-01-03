@@ -20,19 +20,23 @@ export class BrickRenderer extends HTMLElement {
 
   static observedAttributes = [BrickRenderer.#FILE_ATTRIBUTE];
 
+  static #INITIAL_TRANSFORM = {
+    rotateX: 60,
+    rotateY: 0,
+    rotateZ: 45,
+    scale: 0.6,
+  };
+
+  static #INITIAL_COLOR = "#e04d4d";
+
   /** @type {Promise<WorkerRenderer>} */
   renderer;
 
   constructor() {
     super();
 
-    this.color = "#e04d4d";
-    this.transform = {
-      rotateX: 60,
-      rotateY: 0,
-      rotateZ: 45,
-      scale: 0.6,
-    };
+    this.color = BrickRenderer.#INITIAL_COLOR;
+    this.transform = BrickRenderer.#INITIAL_TRANSFORM;
 
     const shadow = this.attachShadow({ mode: "open" });
     shadow.adoptedStyleSheets = [styleSheet];
@@ -115,6 +119,12 @@ export class BrickRenderer extends HTMLElement {
     });
   }
 
+  async reset() {
+    this.transform = BrickRenderer.#INITIAL_TRANSFORM;
+    this.color = BrickRenderer.#INITIAL_COLOR;
+    await this.update();
+  }
+
   /**
    * @param {string} fileName
    */
@@ -156,10 +166,14 @@ export class BrickRenderer extends HTMLElement {
     const colorInput = document.createElement("input");
     colorInput.type = "color";
     colorInput.name = "color";
-    colorInput.value = this.color;
+    colorInput.defaultValue = this.color;
     colorLabel.appendChild(colorInput);
 
-    form.append(scale, colorLabel);
+    const reset = document.createElement("button");
+    reset.textContent = "Reset";
+    reset.type = "reset";
+
+    form.append(scale, colorLabel, reset);
 
     const update = () => {
       const { color, transform } = this.inputs(form);
@@ -169,7 +183,7 @@ export class BrickRenderer extends HTMLElement {
     };
 
     form.addEventListener("input", update);
-    form.addEventListener("reset", update);
+    form.addEventListener("reset", () => this.reset());
 
     return form;
   }
