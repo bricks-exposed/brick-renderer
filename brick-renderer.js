@@ -11,6 +11,7 @@ styleSheet.replaceSync(`
     background-image:
       linear-gradient(to right, #fff2 1px, transparent 1px),
       linear-gradient(to bottom, #fff2 1px, transparent 1px);
+    overflow: auto;
   }
 `);
 
@@ -25,14 +26,26 @@ export class BrickRenderer extends HTMLElement {
   constructor() {
     super();
 
+    this.color = "#e04d4d";
+    this.transform = {
+      rotateX: 60,
+      rotateY: 0,
+      rotateZ: 45,
+      scale: 0.6,
+    };
+
     const shadow = this.attachShadow({ mode: "open" });
     shadow.adoptedStyleSheets = [styleSheet];
 
-    const size = 512;
+    this.size = 512;
 
     this.canvas = document.createElement("canvas");
-    this.canvas.width = size * window.devicePixelRatio;
-    this.canvas.height = size * window.devicePixelRatio;
+    this.canvas.width = this.size * window.devicePixelRatio;
+    this.canvas.height = this.size * window.devicePixelRatio;
+
+    this.canvas.addEventListener("pointermove", (e) => this.orbit(e), {
+      passive: true,
+    });
 
     this.renderer = WorkerRenderer.attach(this.canvas);
 
@@ -50,14 +63,6 @@ export class BrickRenderer extends HTMLElement {
 
     await this.load(this.file);
     this.update();
-  }
-
-  async update() {
-    const { color, transform } = BrickRenderer.inputs(this.form);
-
-    const renderer = await this.renderer;
-
-    renderer.render(color, transform);
   }
 
   /**
@@ -81,6 +86,36 @@ export class BrickRenderer extends HTMLElement {
   }
 
   /**
+   * @param {PointerEvent} event
+   */
+  async orbit(event) {
+    if (!(event.buttons & 1)) {
+      return;
+    }
+
+    this.transform = {
+      ...this.transform,
+      rotateZ: (this.transform.rotateZ + event.movementX) % 360,
+      rotateX: (this.transform.rotateX - event.movementY) % 360,
+    };
+
+    await this.update();
+  }
+
+  async update() {
+    const renderer = await this.renderer;
+
+    const { rotateX, rotateY, rotateZ } = this.transform;
+
+    renderer.render(this.color, {
+      ...this.transform,
+      rotateX: (rotateX * Math.PI) / 180,
+      rotateY: (rotateY * Math.PI) / 180,
+      rotateZ: (rotateZ * Math.PI) / 180,
+    });
+  }
+
+  /**
    * @param {string} fileName
    */
   async load(fileName) {
@@ -91,51 +126,21 @@ export class BrickRenderer extends HTMLElement {
   /**
    * @param {HTMLFormElement} form
    */
-  static inputs(form) {
+  inputs(form) {
     const data = new FormData(form);
-
-    const rotateX = Number.parseFloat(data.get("rotateX")?.toString() ?? "0");
-    const rotateY = Number.parseFloat(data.get("rotateY")?.toString() ?? "0");
-    const rotateZ = Number.parseFloat(data.get("rotateZ")?.toString() ?? "0");
     const scale = Number.parseFloat(data.get("scale")?.toString() ?? "0");
 
     const transform = {
-      rotateX: (rotateX * Math.PI) / 180,
-      rotateY: (rotateY * Math.PI) / 180,
-      rotateZ: (rotateZ * Math.PI) / 180,
+      ...this.transform,
       scale,
     };
 
-    const color = data.get("color")?.toString() ?? "#e04d4d";
+    const color = data.get("color")?.toString() ?? this.color;
     return { color, transform };
   }
 
   createForm() {
     const form = document.createElement("form");
-
-    const rotateX = this.createSlider(
-      "Rotate X",
-      "rotateX",
-      "60",
-      "-180",
-      "180"
-    );
-
-    const rotateY = this.createSlider(
-      "Rotate Y",
-      "rotateY",
-      "0",
-      "-180",
-      "180"
-    );
-
-    const rotateZ = this.createSlider(
-      "Rotate Z",
-      "rotateZ",
-      "45",
-      "-180",
-      "180"
-    );
 
     const scale = this.createSlider(
       "Scale",
@@ -151,12 +156,17 @@ export class BrickRenderer extends HTMLElement {
     const colorInput = document.createElement("input");
     colorInput.type = "color";
     colorInput.name = "color";
-    colorInput.value = "#e04d4d";
+    colorInput.value = this.color;
     colorLabel.appendChild(colorInput);
 
-    form.append(rotateX, rotateY, rotateZ, scale, colorLabel);
+    form.append(scale, colorLabel);
 
-    const update = () => this.update();
+    const update = () => {
+      const { color, transform } = this.inputs(form);
+      this.color = color;
+      this.transform = transform;
+      this.update();
+    };
 
     form.addEventListener("input", update);
     form.addEventListener("reset", update);
