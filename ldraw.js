@@ -58,7 +58,8 @@ export class Part {
 
     const { largestExtent, center } = Part.#boundingBox(lines);
 
-    (this.viewBox = largestExtent / 2), (this.center = center);
+    this.viewBox = largestExtent / 2;
+    this.center = center;
 
     return { lines, triangles };
   }

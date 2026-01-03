@@ -11,7 +11,7 @@ export class PartDb {
     this.db = db;
   }
 
-  static async open(indexedDB = window.indexedDB) {
+  static async open(indexedDB = globalThis.indexedDB) {
     const openRequest = indexedDB.open("parts", 1);
 
     openRequest.addEventListener("upgradeneeded", function () {

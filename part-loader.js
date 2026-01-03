@@ -31,17 +31,21 @@ export class FileLoader {
   async load(fileName, paths) {
     const cachedContents = await this.#fileContentsCache?.get(fileName);
 
-    const contents = cachedContents ?? (await this.#fetch(fileName, paths));
+    try {
+      const contents = cachedContents ?? (await this.#fetch(fileName, paths));
 
-    if (contents == null) {
-      return undefined;
+      if (contents == null) {
+        return undefined;
+      }
+
+      if (!cachedContents) {
+        this.#fileContentsCache?.set(fileName, contents);
+      }
+
+      return contents;
+    } catch (e) {
+      throw new Error(`Unable to load file ${fileName}`, { cause: e });
     }
-
-    if (!cachedContents) {
-      this.#fileContentsCache?.set(fileName, contents);
-    }
-
-    return contents;
   }
 
   /**

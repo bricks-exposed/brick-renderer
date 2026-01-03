@@ -10,7 +10,7 @@ const DEPTH_STENCIL = {
 
 export class GpuRenderer {
   /**
-   * @param {HTMLCanvasElement} canvas
+   * @param {HTMLCanvasElement | OffscreenCanvas} canvas
    */
   to(canvas) {
     return new CanvasRenderer(this, canvas);
@@ -428,18 +428,15 @@ class PartGeometry {
   }
 }
 
-class CanvasRenderer {
+export class CanvasRenderer {
+  #animationFrame = -1;
+
   /**
    * @param {GpuRenderer} gpu
-   * @param {HTMLCanvasElement} canvas
+   * @param {HTMLCanvasElement | OffscreenCanvas} canvas
    */
   constructor(gpu, canvas) {
     this.gpu = gpu;
-
-    // Smoother lines on high resolution displays
-    const devicePixelRatio = window.devicePixelRatio;
-    canvas.width = canvas.clientWidth * devicePixelRatio;
-    canvas.height = canvas.clientHeight * devicePixelRatio;
 
     this.context = this.#getContext(canvas);
 
@@ -468,7 +465,7 @@ class CanvasRenderer {
   }
 
   /**
-   * @param {HTMLCanvasElement} canvas
+   * @param {HTMLCanvasElement | OffscreenCanvas} canvas
    */
   #getContext(canvas) {
     const context = canvas.getContext("webgpu");
@@ -497,9 +494,25 @@ class CanvasRenderer {
       throw new Error("Need to load a part first!");
     }
 
+    const geometry = this.geometry;
+
     const device = this.gpu.device;
 
-    const transformMatrix = this.geometry.transformMatrix(transform);
+    cancelAnimationFrame(this.#animationFrame);
+
+    this.#animationFrame = requestAnimationFrame(() =>
+      this.#render(color, transform, device, geometry)
+    );
+  }
+
+  /**
+   * @param {Color} color
+   * @param {Transform} transform
+   * @param {GPUDevice} device
+   * @param {PartGeometry} geometry
+   */
+  #render(color, transform, device, geometry) {
+    const transformMatrix = geometry.transformMatrix(transform);
 
     device.queue.writeBuffer(
       this.uniformBuffer,
@@ -539,7 +552,7 @@ class CanvasRenderer {
 
     pass.setBindGroup(0, this.bindGroup);
 
-    this.geometry.render(pass);
+    geometry.render(pass);
 
     pass.end();
 
