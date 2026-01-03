@@ -22,6 +22,27 @@ export class WorkerRenderer {
   }
 
   /**
+   * @param {string} fileName
+   */
+  async load(fileName) {
+    worker.postMessage({
+      type: "load",
+      id: this.#id,
+      fileName,
+    });
+
+    const id = this.#id;
+
+    await new Promise(function (resolve, reject) {
+      worker.addEventListener("message", function ({ data }) {
+        if (data.type === "load" && data.id === id) {
+          data.status === "success" ? resolve(id) : reject(data.error);
+        }
+      });
+    });
+  }
+
+  /**
    * @param {string} color
    * @param {Transform} transform
    */
@@ -36,25 +57,23 @@ export class WorkerRenderer {
 
   /**
    * @param {HTMLCanvasElement} canvas
-   * @param {string} fileName
    */
-  static async create(canvas, fileName) {
+  static async attach(canvas) {
     const id = crypto.randomUUID();
     const offscreen = canvas.transferControlToOffscreen();
 
     worker.postMessage(
       {
-        type: "load",
+        type: "attach",
         id,
         canvas: offscreen,
-        fileName,
       },
       [offscreen]
     );
 
     await new Promise(function (resolve, reject) {
       worker.addEventListener("message", function ({ data }) {
-        if (data.type === "load" && data.id === id) {
+        if (data.type === "attach" && data.id === id) {
           data.status === "success" ? resolve(id) : reject(data.error);
         }
       });

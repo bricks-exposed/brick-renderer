@@ -12,12 +12,32 @@ const { partLoader, gpuRenderer } = await setup();
 /** @type {(event: MessageEvent<Message>) => Promise<void>} */
 globalThis.onmessage = async function ({ data }) {
   switch (data.type) {
-    case "load": {
+    case "attach": {
       try {
         const renderer = gpuRenderer.to(data.canvas);
-        const part = await partLoader.load(data.fileName);
-        renderer.load(part);
         renderers.set(data.id, renderer);
+
+        sendMessage({ type: "attach", id: data.id, status: "success" });
+      } catch (e) {
+        sendMessage({
+          type: "attach",
+          id: data.id,
+          status: "error",
+          error: e instanceof Error ? e.toString() : "Unknown attach error",
+        });
+      }
+      return;
+    }
+    case "load": {
+      try {
+        const renderer = renderers.get(data.id);
+
+        if (!renderer) {
+          throw new Error(`Unrecognized rendering id ${data.id}`);
+        }
+
+        const part = await partLoader.load(data.fileName);
+        renderer?.load(part);
 
         sendMessage({ type: "load", id: data.id, status: "success" });
       } catch (e) {
@@ -25,7 +45,7 @@ globalThis.onmessage = async function ({ data }) {
           type: "load",
           id: data.id,
           status: "error",
-          error: e instanceof Error ? e.toString() : "Unknown error",
+          error: e instanceof Error ? e.toString() : "Unknown load error",
         });
       }
 
@@ -45,10 +65,13 @@ sendMessage({ type: "ready" });
 
 /**
  * @typedef {{
+ *   type: "attach";
+ *   id: string;
+ *   canvas: OffscreenCanvas;
+ * } | {
  *   type: "load";
  *   id: string;
  *   fileName: string;
- *   canvas: OffscreenCanvas;
  * } | {
  *   type: "render";
  *   id: string;
@@ -56,12 +79,17 @@ sendMessage({ type: "ready" });
  *   transform: Transform;
  * }} Message
  *
+ * @typedef {{ status: "success" } | { status: "error"; error: string; }} Status
+ *
  * @typedef {{
  *   type: "ready";
  * } | ({
+ *   type: "attach";
+ *   id: string;
+ * } & Status) | ({
  *   type: "load";
  *   id: string;
- * } & ({ status: "success" } | { status: "error"; error: string; }))} Response
+ * } & Status)} Response
  *
  * @typedef {Omit<Worker, 'postMessage'>
  * & {
