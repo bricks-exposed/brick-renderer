@@ -429,8 +429,6 @@ class PartGeometry {
 }
 
 export class CanvasRenderer {
-  #animationFrame = -1;
-
   /**
    * @param {GpuRenderer} gpu
    * @param {HTMLCanvasElement | OffscreenCanvas} canvas
@@ -462,6 +460,12 @@ export class CanvasRenderer {
       this.uniformBuffer,
       this.colorBuffer
     );
+
+    this.depthTexture = this.gpu.device.createTexture({
+      size: [canvas.width, canvas.height],
+      format: DEPTH_STENCIL.format,
+      usage: GPUTextureUsage.RENDER_ATTACHMENT,
+    });
   }
 
   /**
@@ -498,11 +502,7 @@ export class CanvasRenderer {
 
     const device = this.gpu.device;
 
-    cancelAnimationFrame(this.#animationFrame);
-
-    this.#animationFrame = requestAnimationFrame(() =>
-      this.#render(color, transform, device, geometry)
-    );
+    this.#render(color, transform, device, geometry);
   }
 
   /**
@@ -526,11 +526,6 @@ export class CanvasRenderer {
 
     const canvasTexture = this.context.getCurrentTexture();
     const canvasTextureView = canvasTexture.createView();
-    const depthTexture = device.createTexture({
-      size: [canvasTexture.width, canvasTexture.height],
-      format: DEPTH_STENCIL.format,
-      usage: GPUTextureUsage.RENDER_ATTACHMENT,
-    });
 
     const pass = encoder.beginRenderPass({
       label: "Draw it all",
@@ -543,7 +538,7 @@ export class CanvasRenderer {
         },
       ],
       depthStencilAttachment: {
-        view: depthTexture,
+        view: this.depthTexture.createView(),
         depthClearValue: 0,
         depthLoadOp: "clear",
         depthStoreOp: "store",

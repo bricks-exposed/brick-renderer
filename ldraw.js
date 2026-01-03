@@ -30,10 +30,11 @@ export class Part {
           -(this.viewBox * 5),
           this.viewBox * 5
         ),
+        matrix.fromScaling(transform.scale),
         matrix.fromRotationX(transform.rotateX),
         matrix.fromRotationY(transform.rotateY),
         matrix.fromRotationZ(transform.rotateZ),
-        matrix.fromScaling(transform.scale),
+        // matrix.fromScaling(transform.scale),
         matrix.fromTranslation(
           -this.center[0],
           -this.center[1],

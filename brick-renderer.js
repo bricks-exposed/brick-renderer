@@ -1,4 +1,7 @@
-import { WorkerRenderer } from "./worker-renderer.js";
+import { Color } from "./ldraw.js";
+import { PartDb } from "./part-db.js";
+import { ConfigurationLoader, FileLoader, PartLoader } from "./part-loader.js";
+import { CanvasRenderer, GpuRenderer } from "./renderer.js";
 
 const styleSheet = new CSSStyleSheet();
 styleSheet.replaceSync(`
@@ -104,6 +107,8 @@ styleSheet.replaceSync(`
   }
 `);
 
+const { partLoader, gpuRenderer } = await setup();
+
 export class BrickRenderer extends HTMLElement {
   static #FILE_ATTRIBUTE = "file";
 
@@ -123,8 +128,10 @@ export class BrickRenderer extends HTMLElement {
 
   static #INITIAL_COLOR = "#e04d4d";
 
-  /** @type {Promise<WorkerRenderer>} */
+  /** @type {CanvasRenderer} */
   renderer;
+
+  #partLoaded = false;
 
   constructor() {
     super();
@@ -147,9 +154,10 @@ export class BrickRenderer extends HTMLElement {
       passive: true,
     });
 
-    this.renderer = WorkerRenderer.attach(this.canvas);
+    // this.renderer = WorkerRenderer.attach(this.canvas);
+    this.renderer = gpuRenderer.to(this.canvas);
 
-    this.form = this.createForm();
+    this.form = this.#createForm();
 
     shadow.append(this.canvas, this.form);
 
@@ -207,11 +215,13 @@ export class BrickRenderer extends HTMLElement {
   }
 
   async update() {
-    const renderer = await this.renderer;
+    if (!this.#partLoaded) {
+      return;
+    }
 
     const { rotateX, rotateY, rotateZ } = this.transform;
 
-    renderer.render(this.color, {
+    this.renderer.render(Color.custom(this.color), {
       ...this.transform,
       rotateX: (rotateX * Math.PI) / 180,
       rotateY: (rotateY * Math.PI) / 180,
@@ -228,51 +238,26 @@ export class BrickRenderer extends HTMLElement {
    * @param {string} fileName
    */
   async load(fileName) {
-    const renderer = await this.renderer;
-    await renderer.load(fileName);
+    const part = await partLoader.load(fileName);
+
+    await this.renderer.load(part);
+    this.#partLoaded = true;
   }
 
-  /**
-   * @param {HTMLFormElement} form
-   */
-  inputs(form) {
-    const data = new FormData(form);
-    const scale = Number.parseFloat(data.get("scale")?.toString() ?? "0");
-
-    return {
-      ...this.transform,
-      scale,
-    };
-  }
-
-  createForm() {
+  #createForm() {
     const form = document.createElement("form");
 
-    const scale = this.createSlider(
-      "Scale",
-      "scale",
-      "0.6",
-      "0.1",
-      "5",
-      "0.01"
-    );
+    const scale = this.#createSlider("Scale", "scale", "60", "10", "200", "1");
 
     const reset = document.createElement("button");
     reset.ariaLabel = "Reset";
     reset.type = "reset";
 
-    const icon = this.resetSvg();
+    const icon = this.#resetSvg();
 
     reset.appendChild(icon);
 
     form.append(scale, reset);
-
-    const update = () => {
-      this.transform = this.inputs(form);
-      this.update();
-    };
-
-    form.addEventListener("input", update);
     form.addEventListener("reset", () => this.reset());
 
     return form;
@@ -286,7 +271,7 @@ export class BrickRenderer extends HTMLElement {
    * @param {string} max
    * @param {string} step
    */
-  createSlider(labelText, name, value, min, max, step = "1") {
+  #createSlider(labelText, name, value, min, max, step = "1") {
     const label = document.createElement("label");
     label.ariaLabel = labelText;
     const input = document.createElement("input");
@@ -297,46 +282,20 @@ export class BrickRenderer extends HTMLElement {
     input.max = max;
     input.defaultValue = value;
 
+    const update = () => {
+      this.transform.scale = Number.parseFloat(input.value) / 100;
+
+      this.update();
+    };
+
+    input.addEventListener("input", update, { passive: true });
+
     label.appendChild(input);
 
     return label;
   }
 
-  /*
-svg
-        [ viewBox "0 0 60 60"
-        ]
-        [ g
-            []
-            [ Svg.Styled.path
-                [ fill "currentColor"
-                , d
-                    ("M 8,33"
-                        ++ "A 22,22 0 1,0 30,13"
-                        ++ "h -4"
-                        ++ "l 10,-10"
-                        ++ "h -5"
-                        ++ "l -11,11"
-                        ++ "h 1.75"
-                        ++ "v -1"
-                        ++ "a 2,2 0 0,0 0,4"
-                        ++ "v -1"
-                        ++ "h -1.75"
-                        ++ "l 11,11"
-                        ++ "h 5"
-                        ++ "l -10,-10"
-                        ++ "h 4"
-                        ++ "A 18,18 0 1,1 12,33"
-                        ++ "a 2,2 0 1,0 -4,0"
-                        ++ "z"
-                    )
-                ]
-                []
-            ]
-        ]
-  */
-
-  resetSvg() {
+  #resetSvg() {
     const svg = document.createElementNS("http://www.w3.org/2000/svg", "svg");
     svg.setAttribute("viewBox", "0 0 60 60");
     const path = document.createElementNS("http://www.w3.org/2000/svg", "path");
@@ -352,6 +311,38 @@ svg
 
     return svg;
   }
+}
+
+/**
+ * @param {string} fileName
+ * @param {string[]} paths
+ */
+async function fetchPart(fileName, paths) {
+  return Promise.any(
+    paths.map(async function (path) {
+      const response = await fetch(path);
+
+      if (!response.ok) {
+        throw new Error(`Could not load ${path}: ${response.status}`);
+      }
+
+      return response.text();
+    })
+  );
+}
+
+async function setup() {
+  const partDb = await PartDb.open();
+
+  const fileLoader = new FileLoader(fetchPart, partDb);
+
+  const configuration = await new ConfigurationLoader(fileLoader).load();
+
+  const partLoader = new PartLoader(fileLoader);
+
+  const gpuRenderer = await GpuRenderer.create(configuration.colors);
+
+  return { partLoader, gpuRenderer };
 }
 
 customElements.define("brick-renderer", BrickRenderer);

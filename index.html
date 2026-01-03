@@ -12,6 +12,14 @@
   </head>
   <body>
     <brick-renderer file="car.ldr"></brick-renderer>
-    <brick-renderer file="3024.dat"></brick-renderer>
+    <brick-renderer id="a1" file="3001.dat" color="#a277b1"></brick-renderer>
+
+    <!-- <script>
+      const element = document.getElementById("a1");
+      setInterval(function () {
+        const id = /(\d+)\.dat$/.exec(element.getAttribute("file"))[1];
+        element.setAttribute("file", `${Number.parseInt(id) + 1}.dat`);
+      }, 2000);
+    </script> -->
   </body>
 </html>
