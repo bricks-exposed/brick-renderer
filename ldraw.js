@@ -27,8 +27,8 @@ export class Part {
           this.viewBox,
           -this.viewBox,
           this.viewBox,
-          -(this.viewBox * 2),
-          this.viewBox * 2
+          -(this.viewBox * 5),
+          this.viewBox * 5
         ),
         matrix.fromRotationX(transform.rotateX),
         matrix.fromRotationY(transform.rotateY),
