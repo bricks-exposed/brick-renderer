@@ -138,7 +138,7 @@ export class BrickRenderer extends HTMLElement {
     this.color =
       this.getAttribute(BrickRenderer.#COLOR_ATTRIBUTE) ??
       BrickRenderer.#INITIAL_COLOR;
-    this.transform = BrickRenderer.#INITIAL_TRANSFORM;
+    this.transform = { ...BrickRenderer.#INITIAL_TRANSFORM };
 
     const shadow = this.attachShadow({ mode: "open" });
     shadow.adoptedStyleSheets = [styleSheet];
@@ -149,7 +149,21 @@ export class BrickRenderer extends HTMLElement {
     this.canvas.width = this.size * window.devicePixelRatio;
     this.canvas.height = this.size * window.devicePixelRatio;
 
-    this.canvas.addEventListener("pointermove", (e) => this.orbit(e), {
+    this.stopOrbiting = () => {
+      window.removeEventListener("pointermove", this.orbit);
+    };
+
+    /**
+     * @param {PointerEvent} e
+     */
+    this.startOrbiting = (e) => {
+      window.addEventListener("pointerup", this.stopOrbiting, {
+        passive: true,
+      });
+      window.addEventListener("pointermove", this.orbit, { passive: true });
+    };
+
+    this.canvas.addEventListener("pointerdown", this.startOrbiting, {
       passive: true,
     });
 
@@ -173,6 +187,12 @@ export class BrickRenderer extends HTMLElement {
     this.update();
   }
 
+  disconnectedCallback() {
+    this.canvas.removeEventListener("pointerdown", this.startOrbiting);
+    window.removeEventListener("pointermove", this.orbit);
+    window.removeEventListener("pointerup", this.stopOrbiting);
+  }
+
   /**
    * @param {string} name
    * @param {string} _oldValue
@@ -194,13 +214,11 @@ export class BrickRenderer extends HTMLElement {
       }
     }
 
-    await this.update();
+    this.update();
   }
 
-  /**
-   * @param {PointerEvent} event
-   */
-  async orbit(event) {
+  /** @type {(event: PointerEvent) => void} */
+  orbit = (event) => {
     if (!(event.buttons & 1)) {
       return;
     }
@@ -211,10 +229,10 @@ export class BrickRenderer extends HTMLElement {
       rotateX: (this.transform.rotateX - event.movementY) % 360,
     };
 
-    await this.update();
-  }
+    this.update();
+  };
 
-  async update() {
+  update() {
     if (!this.#partLoaded) {
       return;
     }
@@ -229,9 +247,9 @@ export class BrickRenderer extends HTMLElement {
     });
   }
 
-  async reset() {
-    this.transform = BrickRenderer.#INITIAL_TRANSFORM;
-    await this.update();
+  reset() {
+    this.transform = { ...BrickRenderer.#INITIAL_TRANSFORM };
+    this.update();
   }
 
   /**
@@ -246,7 +264,14 @@ export class BrickRenderer extends HTMLElement {
   #createForm() {
     const form = document.createElement("form");
 
-    const scale = this.#createSlider("Scale", "scale", "60", "10", "200", "1");
+    const scale = this.#createSlider(
+      "Scale",
+      "scale",
+      (BrickRenderer.#INITIAL_TRANSFORM.scale * 100).toString(),
+      "10",
+      "200",
+      "1"
+    );
 
     const reset = document.createElement("button");
     reset.ariaLabel = "Reset";
