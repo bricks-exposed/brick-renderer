@@ -1,6 +1,7 @@
 import { Color } from "./ldraw.js";
-import { CanvasRenderer, GpuRenderer } from "./renderer.js";
+import { GpuRenderer } from "./renderer.js";
 import { PartLoader } from "./part-loader-worker.js";
+import { transformMatrix } from "./part-geometry.js";
 
 const styleSheet = new CSSStyleSheet();
 styleSheet.replaceSync(`
@@ -127,11 +128,6 @@ export class BrickRenderer extends HTMLElement {
 
   static #INITIAL_COLOR = "#e04d4d";
 
-  /** @type {CanvasRenderer} */
-  renderer;
-
-  #partLoaded = false;
-
   constructor() {
     super();
 
@@ -167,7 +163,7 @@ export class BrickRenderer extends HTMLElement {
       passive: true,
     });
 
-    this.renderer = gpuRenderer.to(this.canvas);
+    this.renderer = gpuRenderer.configure(this.canvas);
 
     this.partLoader = partGeometryLoader;
 
@@ -233,18 +229,20 @@ export class BrickRenderer extends HTMLElement {
   };
 
   update() {
-    if (!this.#partLoaded) {
+    if (!this.geometry || !this.preparedGeometry) {
       return;
     }
 
     const { rotateX, rotateY, rotateZ } = this.transform;
 
-    this.renderer.render(Color.custom(this.color), {
+    const transform = transformMatrix(this.geometry, {
       ...this.transform,
       rotateX: (rotateX * Math.PI) / 180,
       rotateY: (rotateY * Math.PI) / 180,
       rotateZ: (rotateZ * Math.PI) / 180,
     });
+
+    this.renderer(Color.custom(this.color), transform, this.preparedGeometry);
   }
 
   reset() {
@@ -257,8 +255,8 @@ export class BrickRenderer extends HTMLElement {
    */
   async load(fileName) {
     const geometry = await this.partLoader.load(fileName);
-    this.renderer.load(geometry);
-    this.#partLoaded = true;
+    this.geometry = geometry;
+    this.preparedGeometry = gpuRenderer.prepareGeometry(geometry);
   }
 
   #createForm() {

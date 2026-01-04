@@ -1,7 +1,6 @@
 /** @import { Transform } from "./ldraw.js" */
 /** @import { PartGeometry } from "./part-geometry.js"  */
 import { Color, Colors } from "./ldraw.js";
-import { transformMatrix } from "./part-geometry.js";
 
 /** @satisfies {GPUDepthStencilState} */
 const DEPTH_STENCIL = {
@@ -22,8 +21,110 @@ export class GpuRenderer {
   /**
    * @param {HTMLCanvasElement | OffscreenCanvas} canvas
    */
-  to(canvas) {
-    return new CanvasRenderer(this, canvas);
+  configure(canvas) {
+    const context = canvas.getContext("webgpu");
+
+    if (!context) {
+      throw new Error("Could not get canvas webgpu context");
+    }
+
+    context.configure({
+      device: this.device,
+      format: this.format,
+      alphaMode: "premultiplied",
+    });
+
+    const renderFn = this.prepare({
+      width: canvas.width,
+      height: canvas.height,
+      createView() {
+        return context.getCurrentTexture().createView();
+      },
+    });
+
+    return renderFn;
+  }
+
+  /**
+   *
+   * @param {{
+   *   width: number;
+   *   height: number;
+   *   createView(): GPUTextureView
+   * }} target
+   */
+  prepare(target) {
+    const colorBuffer = this.device.createBuffer({
+      label: "Default color",
+      size: 4 * 4,
+      usage: GPUBufferUsage.COPY_DST | GPUBufferUsage.UNIFORM,
+    });
+
+    const uniformBuffer = this.device.createBuffer({
+      label: "Rotation matrix",
+      size: 16 * 4,
+      usage: GPUBufferUsage.COPY_DST | GPUBufferUsage.UNIFORM,
+    });
+
+    const bindGroup = this.#createBindGroup(uniformBuffer, colorBuffer);
+
+    const depthTexture = this.device.createTexture({
+      size: [target.width, target.height],
+      format: DEPTH_STENCIL.format,
+      usage: GPUTextureUsage.RENDER_ATTACHMENT,
+    });
+
+    const device = this.device;
+
+    /**
+     * @param {Color} color
+     * @param {import("./matrix.js").Matrix} transformedMatrix
+     * @param {ReturnType<typeof this.prepareGeometry>} geometry
+     */
+    return function (
+      color,
+      transformedMatrix,
+      { lines, optionalLines, opaqueTriangles, transparentTriangles }
+    ) {
+      device.queue.writeBuffer(
+        uniformBuffer,
+        0,
+        new Float32Array(transformedMatrix)
+      );
+
+      device.queue.writeBuffer(colorBuffer, 0, new Float32Array(color.rgba));
+
+      const encoder = device.createCommandEncoder();
+
+      const pass = encoder.beginRenderPass({
+        label: "Draw it all",
+        colorAttachments: [
+          {
+            view: target.createView(),
+            loadOp: "clear",
+            storeOp: "store",
+            // clearValue: { r: 0.302, g: 0.427, b: 0.878, a: 1 },
+          },
+        ],
+        depthStencilAttachment: {
+          view: depthTexture.createView(),
+          depthClearValue: 0,
+          depthLoadOp: "clear",
+          depthStoreOp: "store",
+        },
+      });
+
+      pass.setBindGroup(0, bindGroup);
+
+      GpuRenderer.#renderGeometryDescriptor(pass, opaqueTriangles);
+      GpuRenderer.#renderGeometryDescriptor(pass, lines);
+      GpuRenderer.#renderGeometryDescriptor(pass, optionalLines);
+      GpuRenderer.#renderGeometryDescriptor(pass, transparentTriangles);
+
+      pass.end();
+
+      device.queue.submit([encoder.finish()]);
+    };
   }
 
   /**
@@ -39,7 +140,8 @@ export class GpuRenderer {
     const optionalLines = this.#loadGeometry(
       new Float32Array(geometry.optionalLines),
       12,
-      this.#optionalLinePipeline
+      this.#optionalLinePipeline,
+      2
     );
 
     const opaqueTriangles = this.#loadGeometry(
@@ -54,59 +156,44 @@ export class GpuRenderer {
       this.#transparentTrianglePipeline
     );
 
-    /**
-     * @param {GPURenderPassEncoder} pass
-     */
-    function renderOptionalLines(pass) {
-      if (optionalLines.count === 0) {
-        return;
-      }
-
-      pass.setPipeline(optionalLines.pipeline);
-      pass.setVertexBuffer(0, optionalLines.buffer);
-      pass.draw(2, optionalLines.count);
-    }
-
-    /**
-     * @param {GPURenderPassEncoder} pass
-     * @param {{ pipeline: GPURenderPipeline, buffer: GPUBuffer, count: number }} geometry
-     */
-    function render(pass, geometry) {
-      if (geometry.count === 0) {
-        return;
-      }
-
-      pass.setPipeline(geometry.pipeline);
-      pass.setVertexBuffer(0, geometry.buffer);
-      pass.draw(geometry.count);
-    }
-
-    /**
-     * @param {GPURenderPassEncoder} pass
-     */
-    return function (pass) {
-      render(pass, opaqueTriangles);
-      render(pass, lines);
-      renderOptionalLines(pass);
-      render(pass, transparentTriangles);
+    return {
+      lines,
+      optionalLines,
+      opaqueTriangles,
+      transparentTriangles,
     };
   }
 
   /**
-   *
+   * @param {GPURenderPassEncoder} pass
+   * @param {GeometryRenderDescriptor} geometry
+   */
+  static #renderGeometryDescriptor(pass, geometry) {
+    if (geometry.count === 0) {
+      return;
+    }
+
+    pass.setPipeline(geometry.pipeline);
+    pass.setVertexBuffer(0, geometry.buffer);
+    geometry.vertexCount != null
+      ? pass.draw(geometry.vertexCount, geometry.count)
+      : pass.draw(geometry.count);
+  }
+
+  /**
    * @param {Float32Array<ArrayBuffer>} data
    * @param {number} itemSize
    * @param {GPURenderPipeline} pipeline
-   * @returns
+   * @param {number} [vertexCount]
    */
-  #loadGeometry(data, itemSize, pipeline) {
+  #loadGeometry(data, itemSize, pipeline, vertexCount) {
     const buffer = this.device.createBuffer({
       size: data.byteLength,
       usage: GPUBufferUsage.COPY_DST | GPUBufferUsage.VERTEX,
     });
     this.device.queue.writeBuffer(buffer, 0, data);
 
-    return { buffer, pipeline, count: data.length / itemSize };
+    return { buffer, pipeline, count: data.length / itemSize, vertexCount };
   }
 
   /**
@@ -337,7 +424,7 @@ export class GpuRenderer {
    * @param {GPUBuffer} uniformBuffer
    * @param {GPUBuffer} colorBuffer
    */
-  createBindGroup(uniformBuffer, colorBuffer) {
+  #createBindGroup(uniformBuffer, colorBuffer) {
     return this.device.createBindGroup({
       label: "Rotation uniform group",
       layout: this.bindGroupLayout,
@@ -375,141 +462,13 @@ export class GpuRenderer {
   }
 }
 
-export class CanvasRenderer {
-  /**
-   * @param {GpuRenderer} gpu
-   * @param {HTMLCanvasElement | OffscreenCanvas} canvas
-   */
-  constructor(gpu, canvas) {
-    this.gpu = gpu;
-
-    this.context = this.#getContext(canvas);
-
-    this.context.configure({
-      device: gpu.device,
-      format: gpu.format,
-      alphaMode: "premultiplied",
-    });
-
-    this.colorBuffer = this.gpu.device.createBuffer({
-      label: "Default color",
-      size: 4 * 4,
-      usage: GPUBufferUsage.COPY_DST | GPUBufferUsage.UNIFORM,
-    });
-
-    this.uniformBuffer = this.gpu.device.createBuffer({
-      label: "Rotation matrix",
-      size: 16 * 4,
-      usage: GPUBufferUsage.COPY_DST | GPUBufferUsage.UNIFORM,
-    });
-
-    this.bindGroup = this.gpu.createBindGroup(
-      this.uniformBuffer,
-      this.colorBuffer
-    );
-
-    this.depthTexture = this.gpu.device.createTexture({
-      size: [canvas.width, canvas.height],
-      format: DEPTH_STENCIL.format,
-      usage: GPUTextureUsage.RENDER_ATTACHMENT,
-    });
-  }
-
-  /**
-   * @param {HTMLCanvasElement | OffscreenCanvas} canvas
-   */
-  #getContext(canvas) {
-    const context = canvas.getContext("webgpu");
-    if (!context) {
-      throw new Error("Could not get canvas webgpu context");
-    }
-    return context;
-  }
-
-  /**
-   * @param {PartGeometry} geometry
-   */
-  load(geometry) {
-    this.geometry = geometry;
-    this.renderGeometry = this.gpu.prepareGeometry(geometry);
-  }
-
-  /**
-   * @param {Color} color
-   * @param {Transform} transform
-   */
-  render(color, transform) {
-    if (!this.geometry) {
-      throw new Error("Need to load a part first!");
-    }
-
-    const geometry = this.geometry;
-
-    const device = this.gpu.device;
-
-    this.#render(color, transform, device, geometry);
-  }
-
-  /**
-   * @param {Color} color
-   * @param {Transform} transform
-   * @param {GPUDevice} device
-   * @param {PartGeometry} geometry
-   */
-  #render(color, transform, device, geometry) {
-    if (!this.renderGeometry) {
-      return;
-    }
-
-    const transformedMatrix = transformMatrix(geometry, transform);
-
-    device.queue.writeBuffer(
-      this.uniformBuffer,
-      0,
-      new Float32Array(transformedMatrix)
-    );
-
-    device.queue.writeBuffer(this.colorBuffer, 0, new Float32Array(color.rgba));
-
-    const encoder = device.createCommandEncoder();
-
-    const canvasTexture = this.context.getCurrentTexture();
-    const canvasTextureView = canvasTexture.createView();
-
-    const pass = encoder.beginRenderPass({
-      label: "Draw it all",
-      colorAttachments: [
-        {
-          view: canvasTextureView,
-          loadOp: "clear",
-          storeOp: "store",
-          // clearValue: { r: 0.302, g: 0.427, b: 0.878, a: 1 },
-        },
-      ],
-      depthStencilAttachment: {
-        view: this.depthTexture.createView(),
-        depthClearValue: 0,
-        depthLoadOp: "clear",
-        depthStoreOp: "store",
-      },
-    });
-
-    pass.setBindGroup(0, this.bindGroup);
-
-    this.renderGeometry(pass);
-
-    pass.end();
-
-    device.queue.submit([encoder.finish()]);
-  }
-}
-
 /**
  * @typedef {{
  *   count: number;
- *   vertexBuffer: GPUBuffer;
+ *   buffer: GPUBuffer;
  *   pipeline: GPURenderPipeline;
- * }} RenderDescriptor
+ *   vertexCount?: number | undefined;
+ * }} GeometryRenderDescriptor
  */
 
 const EDGE_SHADER = `
