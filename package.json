@@ -7,8 +7,8 @@
   "type": "module",
   "main": "index.js",
   "scripts": {
-    "test": "node --test ldraw.test.js",
-    "test:watch": "node --test --watch ldraw.test.js"
+    "test": "node --test",
+    "test:watch": "node --test --watch"
   },
   "devDependencies": {
     "@types/node": "^25.0.3",

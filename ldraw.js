@@ -1,66 +1,158 @@
 /** @import { Matrix } from "./matrix.js" */
 import * as matrix from "./matrix.js";
 
-export class Part {
-  /** @type {RenderedPart | undefined} */
-  #cachedRender;
+export class File {
+  /** @type {readonly { code: number; rgba: Rgba }[]} */
+  static globalColors = [];
 
   /**
-   *
-   * @param {File} file
-   * @param {Part[]} subParts
+   * @param {string} name
+   * @param {Colors} colors
+   * @param {readonly DrawCommand[]} commands
    */
-  constructor(file, subParts) {
-    this.file = file;
-    this.subParts = new Map(subParts.map((p) => [p.file.name, p]));
+  constructor(name, colors, commands) {
+    this.name = name;
+    this.colors = colors;
+    this.commands = commands;
   }
 
   /**
-   * @returns {RenderedPart}
+   * @param {string} name
+   * @param {ParsedFile | string} contents
+   * @param {File[]} subFiles
    */
-  render() {
-    if (this.#cachedRender) {
-      return this.#cachedRender;
+  static from(name, contents, subFiles = []) {
+    const parsedFile =
+      typeof contents === "string" ? File.parse(contents) : contents;
+
+    const subFileMap = new Map(subFiles.map((f) => [f.name, f]));
+
+    const drawFileCommands = [];
+
+    for (const descriptor of parsedFile.subFiles) {
+      const subFile = subFileMap.get(descriptor.fileName);
+
+      if (!subFile) {
+        throw new Error(`Missing required subFile ${descriptor.fileName}`);
+      }
+
+      drawFileCommands.push(new DrawFile(subFile, descriptor));
     }
 
-    const renderResult = this.#render({}, EmptyRenderResult());
-
-    const { largestExtent, center } = Part.#boundingBox(renderResult.lines);
-
-    const viewBox = largestExtent / 2;
-
-    const renderedPart = {
-      ...renderResult,
-      viewBox,
-      center,
-    };
-
-    this.#cachedRender = renderedPart;
-
-    return renderedPart;
+    return new File(name, parsedFile.colors, [
+      ...parsedFile.commands,
+      ...drawFileCommands,
+    ]);
   }
 
   /**
-   * @param {RenderArgs} args
-   * @param {RenderResult} accumulator
+   * @param {string} contents
+   *
+   * @returns {ParsedFile}
+   */
+  static parse(contents) {
+    const commands = [];
+    const subFiles = [];
+
+    let colors = Colors.from(File.globalColors);
+
+    const BFC_INVERTNEXT = /^0\s+BFC\s+INVERTNEXT/;
+
+    let invertNext = false;
+    for (const line of contents.split("\n")) {
+      const command = line.trim();
+
+      if (!command) {
+        continue;
+      }
+
+      let parsed;
+      if (BFC_INVERTNEXT.test(command)) {
+        invertNext = true;
+      } else if ((parsed = Color.from(command))) {
+        colors = colors.newWith(parsed);
+      } else if ((parsed = DrawGeometry.from(command, invertNext, colors))) {
+        invertNext = false;
+
+        commands.push(parsed);
+      } else if ((parsed = DrawFile.from(command, invertNext, colors))) {
+        invertNext = false;
+
+        subFiles.push(parsed);
+      }
+    }
+    return { colors, commands, subFiles };
+  }
+
+  /**
+   * @param {Partial<RenderArgs>} [args]
+   * @param {RenderResult} [accumulator]
    *
    * @returns {RenderResult}
    */
-  #render(args, accumulator) {
-    const { subFiles } = this.file.render(args, accumulator);
+  render(args, accumulator) {
+    accumulator ??= {
+      lines: [],
+      triangles: [],
+      subFiles: [],
+    };
 
-    for (const subFile of subFiles) {
-      const subPart = this.subParts.get(subFile.fileName);
+    const fullArgs = {
+      transformation: undefined,
+      color: Color.CURRENT_COLOR,
+      invert: false,
+      ...args,
+    };
 
-      if (!subPart) {
-        throw new Error(`Could not find subpart ${subFile}`);
-      }
-
-      accumulator.subFiles = [];
-      subPart.#render(subFile, accumulator);
+    for (const command of this.commands) {
+      command.render(fullArgs, accumulator);
     }
 
     return accumulator;
+  }
+
+  geometry() {
+    const { lines: rawLines, triangles: rawTriangles } = this.render();
+
+    const { viewBox, center } = File.#boundingBox(rawLines);
+
+    /** @type {number[]} */
+    const lines = [];
+
+    /** @type {number[]} */
+    const optionalLines = [];
+
+    /** @type {number[]} */
+    const opaqueTriangles = [];
+
+    /** @type {number[]} */
+    const transparentTriangles = [];
+
+    for (const line of rawLines) {
+      const points = line.points.flat();
+      if (line.controlPoints) {
+        optionalLines.push(...points, ...line.controlPoints.flat());
+      } else {
+        lines.push(...points);
+      }
+    }
+
+    for (const { vertices, color } of rawTriangles) {
+      const array = color.opaque ? opaqueTriangles : transparentTriangles;
+      for (const vertex of vertices) {
+        array.push(...vertex, color.code);
+      }
+    }
+
+    return {
+      fileName: this.name,
+      lines: new Float32Array(lines),
+      optionalLines: new Float32Array(optionalLines),
+      opaqueTriangles: new Float32Array(opaqueTriangles),
+      transparentTriangles: new Float32Array(transparentTriangles),
+      viewBox,
+      center,
+    };
   }
 
   /**
@@ -100,127 +192,9 @@ export class Part {
       max[2] - min[2]
     );
 
-    return { min, max, largestExtent, center };
-  }
-}
+    const viewBox = largestExtent / 2;
 
-/** @typedef {[number, number, number]} Coordinate */
-
-/** @typedef {[Coordinate, Coordinate, Coordinate]} Triangle */
-
-/** @typedef {[number, number, number, number]} Rgba */
-
-/**
- * @typedef {{
- *   points: [Coordinate, Coordinate];
- *   controlPoints?: [Coordinate, Coordinate] | undefined;
- * }} RenderLine
- */
-
-/**
- * @typedef {{
- *   lines: RenderLine[];
- *   triangles: { vertices: Triangle; color: number | null }[];
- * }} Geometry
- *
- * @typedef {{
- *   viewBox: number;
- *   center: [number, number, number]
- * }} Dimensions
- *
- * @typedef {Geometry & Dimensions} RenderedPart
- */
-
-/**
- * @typedef {{
- *   color?: number | null | undefined;
- *   transformation?: Matrix | undefined;
- *   invert?: boolean;
- * }} RenderArgs
- */
-
-/**
- * @typedef {{
- *   fileName: string;
- * } & RenderArgs} SubfileRenderArgs
- */
-
-/** @typedef {Geometry & { subFiles: SubfileRenderArgs[]}} RenderResult */
-
-const EmptyRenderResult = () => ({
-  lines: [],
-  optionalLines: [],
-  triangles: [],
-  subFiles: [],
-});
-
-/**
- * @typedef {{
- *   invert: boolean;
- *   colors: Colors;
- * }} Context
- */
-
-export class File {
-  /**
-   * @param {string} name
-   * @param {string} contents
-   */
-  constructor(name, contents) {
-    this.name = name;
-
-    this.commands = [];
-    this.subFiles = [];
-
-    const colors = [];
-
-    const BFC_INVERTNEXT = /^0\s+BFC\s+INVERTNEXT/;
-
-    let invertNext = false;
-    for (const line of contents.split("\n")) {
-      const command = line.trim();
-
-      if (!command) {
-        continue;
-      }
-
-      let parsed;
-      let color;
-      if (BFC_INVERTNEXT.test(command)) {
-        invertNext = true;
-      } else if ((color = Color.from(command))) {
-        colors.push(color);
-      } else if ((parsed = DrawCommand.from(command, invertNext))) {
-        invertNext = false;
-
-        this.commands.push(parsed);
-
-        if (parsed instanceof DrawFile) {
-          this.subFiles.push(parsed.fileName);
-        }
-      }
-    }
-
-    this.colors = new Colors(colors);
-  }
-
-  /**
-   * @param {RenderArgs} args
-   * @param {RenderResult} [accumulator]
-   *
-   * @returns {RenderResult}
-   */
-  render(
-    args = { transformation: undefined, color: null, invert: false },
-    accumulator
-  ) {
-    accumulator ??= EmptyRenderResult();
-
-    for (const command of this.commands) {
-      command.render(args, accumulator);
-    }
-
-    return accumulator;
+    return { min, max, largestExtent, viewBox, center };
   }
 }
 
@@ -234,30 +208,14 @@ const LineType = Object.freeze({
   DrawOptionalLine: 5,
 });
 
-class Command {
-  /**
-   * @param {string} command
-   * @param {boolean} invert
-   */
-  static from(command, invert) {
-    const [type] = command.split(/\s+/);
-    const parsedType = Number.parseInt(type, 10);
-
-    const constructor = CommandMap[parsedType];
-
-    return constructor?.from(command, invert) ?? null;
-  }
-}
-
 /** @abstract */
-class DrawCommand extends Command {
+class DrawCommand {
   /**
-   * @param {number | null} color
+   * @param {Color} color
    * @param {boolean} invert
    */
   constructor(color, invert) {
-    super();
-    this.color = color === Color.CURRENT_COLOR ? null : color;
+    this.color = color.code === Color.CURRENT_COLOR_CODE ? null : color;
     this.invertedByParent = invert;
   }
 
@@ -283,33 +241,31 @@ class DrawCommand extends Command {
 
 class DrawFile extends DrawCommand {
   /**
-   * @param {string} fileName
-   * @param {number | null} color
-   * @param {Matrix | undefined} transformation
-   * @param {boolean} invertSelf
-   * @param {boolean} parentInvert
+   * @param {File} file
+   * @param {SubFileDescriptor} descriptor
    */
-  constructor(fileName, color, transformation, invertSelf, parentInvert) {
+  constructor(file, { color, transformation, invertSelf, parentInvert }) {
     super(color, parentInvert);
     this.transformation = transformation ?? matrix.identity;
     this.invertSelf = invertSelf;
-    this.fileName = fileName;
+    this.file = file;
   }
 
   /**
-   * @param {RenderArgs} invert
-   * @param {RenderResult} [accumulator]
+   * @param {RenderArgs} args
+   * @param {RenderResult} accumulator
    *
    * @returns {RenderResult}
    */
   render({ color, transformation, invert }, accumulator) {
-    accumulator ??= EmptyRenderResult();
-    accumulator.subFiles.push({
-      fileName: this.fileName,
-      color: this.color ?? color,
-      transformation: matrix.multiply(this.transformation, transformation),
-      invert: this.shouldInvert(invert),
-    });
+    this.file.render(
+      {
+        color: this.color ?? color,
+        transformation: matrix.multiply(this.transformation, transformation),
+        invert: this.shouldInvert(invert),
+      },
+      accumulator
+    );
 
     return accumulator;
   }
@@ -317,11 +273,18 @@ class DrawFile extends DrawCommand {
   /**
    * @param {string} command
    * @param {boolean} parentInvert
+   * @param {Colors} colors
+   *
+   * @returns {SubFileDescriptor | undefined}
    */
-  static from(command, parentInvert) {
-    const [_type, unparsedColor, ...tokens] = command.split(/\s+/);
+  static from(command, parentInvert, colors) {
+    const [type, unparsedColor, ...tokens] = command.split(/\s+/);
 
-    const color = Number.parseInt(unparsedColor);
+    if (type !== LineType.DrawFile.toString()) {
+      return undefined;
+    }
+
+    const color = Number(unparsedColor);
 
     const [fileStart, ...fileRest] = tokens.splice(12);
 
@@ -339,17 +302,20 @@ class DrawFile extends DrawCommand {
 
     const [x, y, z, ...abcdefghi] = tokens.map(Number.parseFloat);
 
-    const inverted = matrix.determinant(abcdefghi) < 0;
+    const invertSelf = matrix.determinant(abcdefghi) < 0;
 
     const [a, b, c, d, e, f, g, h, i] = abcdefghi;
 
-    return new DrawFile(
+    /** @type {Matrix} */
+    const transformation = [a, b, c, x, d, e, f, y, g, h, i, z, 0, 0, 0, 1];
+
+    return {
       fileName,
-      color,
-      [a, b, c, x, d, e, f, y, g, h, i, z, 0, 0, 0, 1],
-      inverted,
-      parentInvert
-    );
+      color: colors.for(color),
+      transformation,
+      invertSelf,
+      parentInvert,
+    };
   }
 
   /**
@@ -363,7 +329,7 @@ class DrawFile extends DrawCommand {
 /** @abstract */
 class DrawGeometry extends DrawCommand {
   /**
-   * @param {number | null} color
+   * @param {Color} color
    * @param {Coordinate[]} coordinates
    * @param {boolean} invert
    */
@@ -380,8 +346,19 @@ class DrawGeometry extends DrawCommand {
   /**
    * @param {string} command
    * @param {boolean} invert
+   * @param {Colors} colors
    */
-  static from(command, invert) {
+  static from(command, invert, colors) {
+    const tokens = command.split(/\s+/);
+
+    const type = Number(tokens[0]);
+
+    const subclass = CommandMap[type];
+
+    if (!subclass) {
+      return undefined;
+    }
+
     const [_type, color, ...points] = command
       .split(/\s+/)
       .map(Number.parseFloat);
@@ -392,7 +369,7 @@ class DrawGeometry extends DrawCommand {
       coordinates.push([points[i], points[i + 1], points[i + 2]]);
     }
 
-    return new this(color, coordinates, invert);
+    return new subclass(colors.for(color), coordinates, invert);
   }
 
   /**
@@ -444,7 +421,7 @@ class DrawTriangle extends DrawGeometry {
   invertedTriangles;
 
   /**
-   * @param {number} color
+   * @param {Color} color
    * @param {Coordinate[]} coordinates
    * @param {boolean} invert
    */
@@ -470,13 +447,11 @@ class DrawTriangle extends DrawGeometry {
 
   /**
    * @param {RenderArgs} args
-   * @param {RenderResult} [accumulator]
+   * @param {RenderResult} accumulator
    *
    * @returns {RenderResult}
    */
   render({ color, transformation, invert }, accumulator) {
-    accumulator ??= EmptyRenderResult();
-
     const geometry = accumulator.triangles;
 
     const triangles = this.shouldInvert(invert)
@@ -486,7 +461,7 @@ class DrawTriangle extends DrawGeometry {
     for (const triangle of triangles) {
       geometry.push({
         vertices: DrawTriangle.transformTriangle(transformation, triangle),
-        color: this.color ?? color ?? null,
+        color: this.color ?? color,
       });
     }
 
@@ -506,7 +481,7 @@ class DrawTriangle extends DrawGeometry {
 
 class DrawQuadrilateral extends DrawTriangle {
   /**
-   * @param {number} color
+   * @param {Color} color
    * @param {Coordinate[]} coordinates
    * @param {boolean} invert
    */
@@ -535,12 +510,12 @@ class DrawLine extends DrawGeometry {
   controlPoints;
 
   /**
-   * @param {number} _color
+   * @param {Color} color
    * @param {Coordinate[]} coordinates
    * @param {boolean} _invert
    */
-  constructor(_color, coordinates, _invert) {
-    super(Color.EDGE_COLOR, coordinates, false);
+  constructor(color, coordinates, _invert) {
+    super(color, coordinates, false);
     const [first, second, control1, control2] = coordinates;
     this.coordinates = [first, second];
     this.controlPoints = control1 ? [control1, control2] : undefined;
@@ -548,13 +523,11 @@ class DrawLine extends DrawGeometry {
 
   /**
    * @param {RenderArgs} args
-   * @param {RenderResult} [accumulator]
+   * @param {RenderResult} accumulator
    *
    * @returns {RenderResult}
    */
   render({ transformation }, accumulator) {
-    accumulator ??= EmptyRenderResult();
-
     const geometry = accumulator.lines;
 
     const points = DrawGeometry.transform(transformation, this.coordinates);
@@ -577,9 +550,8 @@ class DrawLine extends DrawGeometry {
   }
 }
 
-/** @type {Record<number, { from(command: string, invert: boolean): DrawCommand}>} */
+/** @type {Record<number, { new(color: Color, coordinates: Coordinate[], invert: boolean): DrawGeometry}>} */
 const CommandMap = {
-  [LineType.DrawFile]: DrawFile,
   [LineType.DrawLine]: DrawLine,
   [LineType.DrawOptionalLine]: DrawLine,
   [LineType.DrawTriangle]: DrawTriangle,
@@ -598,17 +570,44 @@ export class Colors {
   }
 
   /**
-   * @param {number | string | null | undefined} code
+   *
+   * @param {readonly {
+   *   code: number;
+   *   rgba: Rgba;
+   * }[]} colors
+   */
+  static from(colors) {
+    return new Colors(
+      colors.map(({ code, rgba }) => new Color(code.toString(), code, rgba))
+    );
+  }
+
+  /**
+   * @param {Colors} colors
+   */
+  combine(colors) {
+    return new Colors([...this.all, ...colors.all]);
+  }
+
+  /**
+   * @param {Color} color
+   */
+  newWith(color) {
+    return new Colors([...this.all, color]);
+  }
+
+  /**
+   * @param {number | string} code
    */
   for(code) {
-    if (code == null) {
-      return null;
+    code = Number(code);
+
+    if (code === Color.CURRENT_COLOR_CODE) {
+      return Color.CURRENT_COLOR;
     }
 
-    code = typeof code === "number" ? code : Number.parseInt(code, 10);
-
-    if (code === Color.CURRENT_COLOR || code === Color.EDGE_COLOR) {
-      return null;
+    if (code === Color.EDGE_COLOR_CODE) {
+      return Color.EDGE_COLOR;
     }
 
     const color = this.#colors.get(code);
@@ -622,11 +621,23 @@ export class Colors {
 }
 
 export class Color {
-  static CURRENT_COLOR = 16;
+  static CURRENT_COLOR_CODE = 16;
 
-  static EDGE_COLOR = 24;
+  static CURRENT_COLOR = new Color(
+    "Current color",
+    this.CURRENT_COLOR_CODE,
+    [0, 0, 0, 0]
+  );
 
-  static DEFAULT = new Color("DEFAULT_COLOR", -1, "#1B2A34", "#2B4354");
+  static EDGE_COLOR_CODE = 24;
+
+  static EDGE_COLOR = new Color(
+    "Current color",
+    this.EDGE_COLOR_CODE,
+    [0, 0, 0, 0]
+  );
+
+  static DEFAULT = new Color("DEFAULT_COLOR", -1, "#1B2A34");
 
   /** @readonly @type {Rgba} */
   rgba;
@@ -634,27 +645,29 @@ export class Color {
   /**
    * @param {string} name
    * @param {number} code
-   * @param {string} value
-   * @param {string} edge
+   * @param {string | Rgba} value
    */
-  constructor(name, code, value, edge) {
+  constructor(name, code, value) {
     this.name = name;
     this.code = code;
-    this.value = value;
-    this.edge = edge;
-    const r = Number.parseInt(value.slice(1, 3), 16);
-    const g = Number.parseInt(value.slice(3, 5), 16);
-    const b = Number.parseInt(value.slice(5, 7), 16);
-    const a = value.length === 9 ? Number.parseInt(value.slice(7), 16) : 255;
-    this.rgba = [r, g, b, a];
-    this.opaque = a === 255;
+
+    if (typeof value === "string") {
+      const r = Number.parseInt(value.slice(1, 3), 16);
+      const g = Number.parseInt(value.slice(3, 5), 16);
+      const b = Number.parseInt(value.slice(5, 7), 16);
+      const a = value.length === 9 ? Number.parseInt(value.slice(7), 16) : 255;
+      this.rgba = [r, g, b, a];
+    } else {
+      this.rgba = value;
+    }
+    this.opaque = this.rgba[3] === 255;
   }
 
   /**
    * @param {string} hex
    */
   static custom(hex) {
-    return new Color("Custom", -1, hex, hex);
+    return new Color("Custom", -1, hex);
   }
 
   /**
@@ -699,8 +712,80 @@ export class Color {
     return new Color(
       name.replaceAll("_", " "),
       Number.parseInt(code, 10),
-      value,
-      edge
+      value
     );
   }
 }
+
+/**
+ * @typedef {{
+ *   fileName: string;
+ *   color: Color;
+ *   transformation: Matrix;
+ *   invertSelf: boolean;
+ *   parentInvert: boolean;
+ * }} SubFileDescriptor
+ */
+
+/**
+ * @typedef {{
+ *   colors: Colors;
+ *   commands: readonly DrawGeometry[];
+ *   subFiles: readonly SubFileDescriptor[];
+ * }} ParsedFile
+ */
+
+/** @typedef {[number, number, number]} Coordinate */
+
+/** @typedef {[Coordinate, Coordinate, Coordinate]} Triangle */
+
+/** @typedef {[number, number, number, number]} Rgba */
+
+/**
+ * @typedef {{
+ *   points: [Coordinate, Coordinate];
+ *   controlPoints?: [Coordinate, Coordinate] | undefined;
+ * }} RenderLine
+ */
+
+/**
+ * @typedef {{
+ *   lines: RenderLine[];
+ *   triangles: { vertices: Triangle; color: Color }[];
+ * }} Geometry
+ *
+ * @typedef {{
+ *   viewBox: number;
+ *   center: [number, number, number]
+ * }} Dimensions
+ *
+ * @typedef {Geometry & Dimensions} RenderedPart
+ */
+
+/**
+ * @typedef {{
+ *   color: Color;
+ *   transformation?: Matrix | undefined;
+ *   invert?: boolean;
+ * }} RenderArgs
+ */
+
+/**
+ * @typedef {{
+ *   fileName: string;
+ * } & RenderArgs} SubfileRenderArgs
+ */
+
+/** @typedef {Geometry & { subFiles: SubfileRenderArgs[]}} RenderResult */
+
+/**
+ * @typedef {{
+ *   fileName: string;
+ *   lines: Float32Array<ArrayBuffer>;
+ *   optionalLines: Float32Array<ArrayBuffer>;
+ *   opaqueTriangles: Float32Array<ArrayBuffer>;
+ *   transparentTriangles: Float32Array<ArrayBuffer>;
+ *   viewBox: number,
+ *   center: [number, number, number],
+ * }} PartGeometry
+ */

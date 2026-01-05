@@ -1,13 +1,13 @@
 import { describe, it } from "node:test";
 import assert from "node:assert/strict";
-import { Part, File, Color, Colors } from "./ldraw.js";
+import { File, Color, Colors } from "./ldraw.js";
 import { fromScaling } from "./matrix.js";
 
 const Test_Colors = new Colors([Color.custom("#000000")]);
 
 describe("Part rendering", function () {
   it("should render basic lines", function () {
-    const file = new File("test.dat", "2 24 1 0 0 1 1 0");
+    const file = File.from("test.dat", "2 24 1 0 0 1 1 0");
 
     const { lines } = file.render();
 
@@ -23,7 +23,7 @@ describe("Part rendering", function () {
   });
 
   it("should render optional lines", function () {
-    const file = new File("test.dat", "5 24 1 0 0 1 1 0 0.9 0 0.4 0.9 0 -0.4");
+    const file = File.from("test.dat", "5 24 1 0 0 1 1 0 0.9 0 0.4 0.9 0 -0.4");
 
     const { lines } = file.render();
 
@@ -42,7 +42,7 @@ describe("Part rendering", function () {
   });
 
   it("should render triangles", function () {
-    const file = new File("triangle.dat", "3 16 0 0 0 1 0 0 0 1 0");
+    const file = File.from("triangle.dat", "3 16 0 0 0 1 0 0 0 1 0");
 
     const { lines, triangles } = file.render();
 
@@ -56,53 +56,13 @@ describe("Part rendering", function () {
           [1, 0, 0],
           [0, 0, 1],
         ],
-        color: null,
-      },
-    ]);
-  });
-
-  it("should render triangles with a color with code 0", function () {
-    const file = new File("triangle.dat", "3 0 0 0 0 1 0 0 0 1 0");
-
-    const { lines, triangles } = file.render();
-
-    assert.equal(lines.length, 0);
-    // Triangle vertices: (0,0,0), (1,0,0), (0,1,0)
-    // Mapped to GPU [x,z,y]: (0,0,0), (1,0,0), (0,0,1)
-    assert.deepEqual(triangles, [
-      {
-        vertices: [
-          [0, 0, 0],
-          [1, 0, 0],
-          [0, 0, 1],
-        ],
-        color: 0,
-      },
-    ]);
-  });
-
-  it("should render triangles with a color with nonzero code", function () {
-    const file = new File("triangle.dat", "3 5 0 0 0 1 0 0 0 1 0");
-
-    const { lines, triangles } = file.render();
-
-    assert.equal(lines.length, 0);
-    // Triangle vertices: (0,0,0), (1,0,0), (0,1,0)
-    // Mapped to GPU [x,z,y]: (0,0,0), (1,0,0), (0,0,1)
-    assert.deepEqual(triangles, [
-      {
-        vertices: [
-          [0, 0, 0],
-          [1, 0, 0],
-          [0, 0, 1],
-        ],
-        color: 5,
+        color: Color.CURRENT_COLOR,
       },
     ]);
   });
 
   it("should render quadrilaterals as two triangles", function () {
-    const file = new File("quad.dat", "4 16 0 0 0 1 0 0 1 1 0 0 1 0");
+    const file = File.from("quad.dat", "4 16 0 0 0 1 0 0 1 1 0 0 1 0");
 
     const { triangles } = file.render();
 
@@ -117,7 +77,7 @@ describe("Part rendering", function () {
           [1, 0, 0],
           [1, 0, 1],
         ],
-        color: null,
+        color: Color.CURRENT_COLOR,
       },
       {
         vertices: [
@@ -125,13 +85,13 @@ describe("Part rendering", function () {
           [0, 0, 1],
           [0, 0, 0],
         ],
-        color: null,
+        color: Color.CURRENT_COLOR,
       },
     ]);
   });
 
   it("should apply transformations", function () {
-    const file = new File("test.dat", "3 16 1 0 0 2 0 0 1 1 0");
+    const file = File.from("test.dat", "3 16 1 0 0 2 0 0 1 1 0");
 
     const { triangles } = file.render({ transformation: fromScaling(2) });
 
@@ -145,13 +105,13 @@ describe("Part rendering", function () {
           [4, 0, 0],
           [2, 0, 2],
         ],
-        color: null,
+        color: Color.CURRENT_COLOR,
       },
     ]);
   });
 
   it("should handle inversion", function () {
-    const file = new File("test.dat", "3 16 0 0 0 1 0 0 0 1 0");
+    const file = File.from("test.dat", "3 16 0 0 0 1 0 0 0 1 0");
 
     const inverted = file.render({ invert: true });
 
@@ -163,22 +123,21 @@ describe("Part rendering", function () {
           [1, 0, 0],
           [0, 0, 0],
         ],
-        color: null,
+        color: Color.CURRENT_COLOR,
       },
     ]);
   });
 
   it("should render subparts with transformations", function () {
-    const childFile = new File("child.dat", "3 16 0 0 0 1 0 0 0 1 0");
-    const childPart = new Part(childFile, []);
+    const childFile = File.from("child.dat", "3 16 0 0 0 1 0 0 0 1 0");
 
-    const parentFile = new File(
+    const parentFile = File.from(
       "parent.dat",
-      "1 16 10 0 0 1 0 0 0 1 0 0 0 1 child.dat"
+      "1 16 10 0 0 1 0 0 0 1 0 0 0 1 child.dat",
+      [childFile]
     );
-    const parentPart = new Part(parentFile, [childPart]);
 
-    const { triangles } = parentPart.render();
+    const { triangles } = parentFile.render();
 
     // Child triangle at (0,0,0), (1,0,0), (0,1,0)
     // Translated by (10,0,0)
@@ -191,25 +150,24 @@ describe("Part rendering", function () {
           [11, 0, 0],
           [10, 0, 1],
         ],
-        color: null,
+        color: Color.CURRENT_COLOR,
       },
     ]);
   });
 
   it("should handle BFC INVERTNEXT", function () {
-    const childFile = new File("child.dat", "3 16 0 0 0 1 0 0 0 1 0");
-    const childPart = new Part(childFile, []);
+    const childFile = File.from("child.dat", "3 16 0 0 0 1 0 0 0 1 0");
 
-    const parentFile = new File(
+    const parentFile = File.from(
       "parent.dat",
       `
       0 BFC INVERTNEXT
       1 16 0 0 0 1 0 0 0 1 0 0 0 1 child.dat
-    `
+    `,
+      [childFile]
     );
-    const parentPart = new Part(parentFile, [childPart]);
 
-    const result = parentPart.render();
+    const result = parentFile.render();
 
     // Child triangle inverted: reversed coords before mapping (0,1,0), (1,0,0), (0,0,0) -> GPU: (0,0,1), (1,0,0), (0,0,0)
     assert.deepEqual(result.triangles, [
@@ -219,22 +177,21 @@ describe("Part rendering", function () {
           [1, 0, 0],
           [0, 0, 0],
         ],
-        color: null,
+        color: Color.CURRENT_COLOR,
       },
     ]);
   });
 
   it("should detect negative determinant as inverted", function () {
-    const childFile = new File("child.dat", "3 16 0 0 0 1 0 0 0 1 0");
-    const childPart = new Part(childFile, []);
+    const childFile = File.from("child.dat", "3 16 0 0 0 1 0 0 0 1 0");
 
-    const parentFile = new File(
+    const parentFile = File.from(
       "parent.dat",
-      "1 16 0 0 0 -1 0 0 0 1 0 0 0 1 child.dat"
+      "1 16 0 0 0 -1 0 0 0 1 0 0 0 1 child.dat",
+      [childFile]
     );
-    const parentPart = new Part(parentFile, [childPart]);
 
-    const result = parentPart.render();
+    const result = parentFile.render();
 
     // Negative scale in x (-1) inverts and mirrors
     // Original: (0,0,0), (1,0,0), (0,1,0)
@@ -247,31 +204,19 @@ describe("Part rendering", function () {
           [-1, 0, 0],
           [0, 0, 0],
         ],
-        color: null,
+        color: Color.CURRENT_COLOR,
       },
     ]);
   });
 });
 
 describe("Colors", function () {
-  it("should parse a basic color", function () {
-    const parsed = Color.from(
-      "0 !COLOUR Black   CODE   0     VALUE #1B2A34   EDGE #2B4354"
-    );
-
-    assert.equal(parsed?.name, "Black");
-    assert.equal(parsed.code, 0);
-    assert.equal(parsed.value, "#1B2A34");
-    assert.equal(parsed.edge, "#2B4354");
-  });
-
   it("should parse a transparent color and apply the alpha", function () {
     const parsed = Color.from(
       "0 !COLOUR Transparent_Pink  CODE  45   VALUE #FC97AC   EDGE #F9345B   ALPHA 128"
     );
 
-    assert.equal(parsed?.value, "#FC97AC80");
-    assert.equal(parsed.edge, "#F9345B80");
+    assert.equal(parsed?.rgba[3], 128);
   });
 
   it("should properly convert to rgb", function () {

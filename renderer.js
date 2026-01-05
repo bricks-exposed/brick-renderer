@@ -1,5 +1,5 @@
 /** @import { Matrix } from "./matrix.js" */
-/** @import { PartGeometry } from "./part-geometry.js"  */
+/** @import { PartGeometry } from "./ldraw.js"  */
 import { Color } from "./ldraw.js";
 
 /** @satisfies {GPUDepthStencilState} */
@@ -592,7 +592,8 @@ const TRIANGLE_SHADER = `
 
     var color: vec4f;
 
-    if (colorIndex == -1) {
+    // 16 is LDraw's "current color"
+    if (colorIndex == 16) {
       color = defaultColor / 255;
     } else {
       let x = colorIndex % 256;

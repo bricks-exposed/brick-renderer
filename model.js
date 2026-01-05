@@ -1,4 +1,4 @@
-/** @import { PartGeometry } from "./part-geometry.js" */
+/** @import { PartGeometry } from "./ldraw.js" */
 /** @import { Color } from "./ldraw.js" */
 /** @import { Loader } from "./part-loader-worker.js" */
 import * as matrix from "./matrix.js";

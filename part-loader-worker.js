@@ -1,9 +1,14 @@
-/** @import { PartGeometry } from "./part-geometry.js" */
+/** @import { PartGeometry } from "./ldraw.js" */
 /** @import { PartWorker } from "./part-worker.js" */
 import { AsyncWorker } from "./async-worker.js";
 
 export class Loader {
-  /** @type {Promise<readonly { code: number; rgba: number[] }[]> | undefined} */
+  /**
+   * @type {Promise<readonly {
+   *   code: number;
+   *   rgba: [number, number, number, number] }[]
+   * > | undefined}
+   */
   #cachedInitializeRequest;
 
   /** @readonly @type {Map<string, Promise<PartGeometry>>} */

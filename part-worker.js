@@ -1,15 +1,11 @@
-/** @import { PartGeometry } from "./part-geometry.js" */
+/** @import { PartGeometry } from "./ldraw.js" */
 /** @import { TypedWorker, TypedInnerWorker } from "./async-worker.js" */
 import { PartDb } from "./part-db.js";
-import { FileLoader, PartLoader } from "./part-loader.js";
-import { getPartGeometry } from "./part-geometry.js";
-import { Colors } from "./ldraw.js";
+import { FileLoader } from "./file-loader.js";
+import { Colors, File } from "./ldraw.js";
 
 /** @type {FileLoader} */
 let fileLoader;
-
-/** @type {PartLoader} */
-let partLoader;
 
 /** @type {Colors} */
 let colors;
@@ -24,8 +20,6 @@ self.onmessage = async function ({ data: { type, data, id } }) {
       const partDb = await PartDb.open();
 
       fileLoader = new FileLoader(fetchPart, partDb);
-
-      partLoader = new PartLoader(fileLoader);
 
       const configFile = await fileLoader.load("LDCfgalt.ldr");
 
@@ -42,6 +36,8 @@ self.onmessage = async function ({ data: { type, data, id } }) {
 
       colors ??= configFile.colors;
 
+      File.globalColors = colors.all;
+
       self.postMessage({
         type: "initialize",
         id,
@@ -53,9 +49,20 @@ self.onmessage = async function ({ data: { type, data, id } }) {
     }
     case "load:part": {
       try {
-        const part = await partLoader.load(data);
+        const file = await fileLoader.load(data);
 
-        const geometry = getPartGeometry(colors, part);
+        if (!file) {
+          self.postMessage({
+            type: "load:part",
+            id,
+            success: false,
+            error: `Could not load part ${data}`,
+          });
+
+          return;
+        }
+
+        const geometry = file.geometry();
 
         self.postMessage(
           {
@@ -112,7 +119,7 @@ function fetchPart(fileName, paths) {
  *   };
  *   "initialize": {
  *     request: undefined;
- *     response: readonly  { code: number; rgba: number[] }[];
+ *     response: readonly { code: number; rgba: [number, number, number, number] }[];
  *   }
  * }} Events
  *

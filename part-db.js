@@ -1,4 +1,4 @@
-/** @import { FileContentsCache } from "./part-loader.js" */
+/** @import { FileContentsCache } from "./file-loader.js" */
 
 /**
  * @implements {FileContentsCache}
