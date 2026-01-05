@@ -1,6 +1,6 @@
 /** @import { Matrix } from "./matrix.js" */
 /** @import { PartGeometry } from "./part-geometry.js"  */
-import { Color, Colors } from "./ldraw.js";
+import { Color } from "./ldraw.js";
 
 /** @satisfies {GPUDepthStencilState} */
 const DEPTH_STENCIL = {
@@ -192,13 +192,13 @@ export class GpuRenderer {
   /**
    * @param {GPUDevice} device
    * @param {GPUTextureFormat} format
-   * @param {Colors} colors
+   * @param {readonly { code: number; rgba: number[] }[]} colors
    */
   constructor(device, format, colors) {
     this.device = device;
     this.format = format;
 
-    const highestCode = colors.all.reduce(
+    const highestCode = colors.reduce(
       (acc, { code }) => Math.max(acc, code),
       0
     );
@@ -206,7 +206,7 @@ export class GpuRenderer {
     const textureWidth = 256;
     const textureHeight = Math.ceil((highestCode + 1) / textureWidth);
     const textureData = new Uint8Array(textureWidth * textureHeight * 4);
-    for (const color of colors.all) {
+    for (const color of colors) {
       textureData.set(color.rgba, color.code * 4);
     }
 
@@ -438,7 +438,7 @@ export class GpuRenderer {
   }
 
   /**
-   * @param {Colors} colors
+   * @param {readonly  { code: number; rgba: number[] }[]} colors
    */
   static async create(colors) {
     const adapter = await navigator.gpu.requestAdapter();

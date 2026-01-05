@@ -172,6 +172,8 @@ export class File {
     this.commands = [];
     this.subFiles = [];
 
+    const colors = [];
+
     const BFC_INVERTNEXT = /^0\s+BFC\s+INVERTNEXT/;
 
     let invertNext = false;
@@ -183,8 +185,11 @@ export class File {
       }
 
       let parsed;
+      let color;
       if (BFC_INVERTNEXT.test(command)) {
         invertNext = true;
+      } else if ((color = Color.from(command))) {
+        colors.push(color);
       } else if ((parsed = DrawCommand.from(command, invertNext))) {
         invertNext = false;
 
@@ -195,6 +200,8 @@ export class File {
         }
       }
     }
+
+    this.colors = new Colors(colors);
   }
 
   /**
@@ -578,26 +585,6 @@ const CommandMap = {
   [LineType.DrawTriangle]: DrawTriangle,
   [LineType.DrawQuadrilateral]: DrawQuadrilateral,
 };
-
-export class Configuration {
-  /**
-   * @param {Colors} colors
-   */
-  constructor(colors) {
-    this.colors = colors;
-  }
-
-  /**
-   * @param {string} contents
-   */
-  static from(contents) {
-    const commands = contents.split("\n").filter((l) => !!l.trim());
-
-    const colors = commands.map(Color.from).filter((c) => c != null);
-
-    return new this(new Colors(colors));
-  }
-}
 
 export class Colors {
   #colors;

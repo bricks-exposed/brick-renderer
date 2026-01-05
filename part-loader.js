@@ -1,4 +1,4 @@
-import { Part, File, Configuration } from "./ldraw.js";
+import { Part, File } from "./ldraw.js";
 
 /**
  * @typedef {{
@@ -9,6 +9,9 @@ import { Part, File, Configuration } from "./ldraw.js";
 
 export class FileLoader {
   #getPaths;
+
+  /** @type {Map<string, File>} */
+  #fileCache = new Map();
 
   #fileContentsCache;
 
@@ -27,8 +30,16 @@ export class FileLoader {
   /**
    * @param {string} fileName
    * @param {string[]} [paths]
+   *
+   * @returns {Promise<File | undefined>}
    */
   async load(fileName, paths) {
+    const cachedFile = this.#fileCache.get(fileName);
+
+    if (cachedFile) {
+      return cachedFile;
+    }
+
     const cachedContents = await this.#fileContentsCache?.get(fileName);
 
     try {
@@ -42,7 +53,11 @@ export class FileLoader {
         this.#fileContentsCache?.set(fileName, contents);
       }
 
-      return contents;
+      const file = new File(fileName, contents);
+
+      this.#fileCache.set(fileName, file);
+
+      return file;
     } catch (e) {
       throw new Error(`Unable to load file ${fileName}`, { cause: e });
     }
@@ -68,32 +83,8 @@ export class FileLoader {
   }
 }
 
-export class ConfigurationLoader {
-  #fileLoader;
-
-  /**
-   * @param {FileLoader} fileLoader
-   */
-  constructor(fileLoader) {
-    this.#fileLoader = fileLoader;
-  }
-
-  async load(fileName = "LDCfgalt.ldr") {
-    const fileContents = await this.#fileLoader.load(fileName);
-
-    if (!fileContents) {
-      throw new Error(`Could not find config file ${fileName}`);
-    }
-
-    return Configuration.from(fileContents);
-  }
-}
-
 export class PartLoader {
   #fileLoader;
-
-  /** @type {Map<string, File>} */
-  #fileCache = new Map();
 
   /** @type {Map<string, Promise<Part>>} */
   #partCache = new Map();
@@ -133,18 +124,13 @@ export class PartLoader {
    * @returns {Promise<Part>}
    */
   async #loadPart(fileName) {
-    let file =
-      this.#fileCache.get(fileName) ??
-      (await this.#fileLoader.load(fileName, PartLoader.#paths(fileName)));
+    const file = await this.#fileLoader.load(
+      fileName,
+      PartLoader.#paths(fileName)
+    );
 
     if (!file) {
       throw new Error(`Could not find file for ${fileName}`);
-    }
-
-    if (typeof file === "string") {
-      file = new File(fileName, file);
-
-      this.#fileCache.set(fileName, file);
     }
 
     const subParts = await Promise.all(

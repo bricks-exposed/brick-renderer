@@ -1,11 +1,10 @@
 /** @import { PartGeometry } from "./part-geometry.js" */
 /** @import { PartWorker } from "./part-worker.js" */
 import { AsyncWorker } from "./async-worker.js";
-import { Colors } from "./ldraw.js";
 
 export class Loader {
-  /** @type {Promise<Colors> | undefined} */
-  #cachedColorRequest;
+  /** @type {Promise<readonly { code: number; rgba: number[] }[]> | undefined} */
+  #cachedInitializeRequest;
 
   /** @readonly @type {Map<string, Promise<PartGeometry>>} */
   #cachedPartRequests = new Map();
@@ -20,8 +19,8 @@ export class Loader {
     this.#worker = new AsyncWorker(worker);
   }
 
-  async initialize() {
-    await this.#worker.run("initialize");
+  initialize() {
+    return (this.#cachedInitializeRequest ??= this.#worker.run("initialize"));
   }
 
   /**
@@ -39,14 +38,5 @@ export class Loader {
     this.#cachedPartRequests.set(fileName, promise);
 
     return promise;
-  }
-
-  /**
-   * @returns {Promise<Colors>}
-   */
-  async loadColors() {
-    return (this.#cachedColorRequest ??= this.#worker
-      .run("load:colors")
-      .then((c) => new Colors(c)));
   }
 }

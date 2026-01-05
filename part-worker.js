@@ -1,9 +1,9 @@
-/** @import { Color, Colors } from "./ldraw.js" */
 /** @import { PartGeometry } from "./part-geometry.js" */
 /** @import { TypedWorker, TypedInnerWorker } from "./async-worker.js" */
 import { PartDb } from "./part-db.js";
-import { ConfigurationLoader, FileLoader, PartLoader } from "./part-loader.js";
+import { FileLoader, PartLoader } from "./part-loader.js";
 import { getPartGeometry } from "./part-geometry.js";
+import { Colors } from "./ldraw.js";
 
 /** @type {FileLoader} */
 let fileLoader;
@@ -27,11 +27,26 @@ self.onmessage = async function ({ data: { type, data, id } }) {
 
       partLoader = new PartLoader(fileLoader);
 
+      const configFile = await fileLoader.load("LDCfgalt.ldr");
+
+      if (!configFile) {
+        self.postMessage({
+          type: "initialize",
+          id,
+          success: false,
+          error: "Could not find config file for colors",
+        });
+
+        return;
+      }
+
+      colors ??= configFile.colors;
+
       self.postMessage({
         type: "initialize",
         id,
         success: true,
-        data: undefined,
+        data: colors.all,
       });
 
       return;
@@ -67,18 +82,6 @@ self.onmessage = async function ({ data: { type, data, id } }) {
 
       return;
     }
-    case "load:colors": {
-      colors ??= (await new ConfigurationLoader(fileLoader).load()).colors;
-
-      self.postMessage({
-        type: "load:colors",
-        id,
-        success: true,
-        data: colors.all,
-      });
-
-      return;
-    }
   }
 };
 
@@ -107,13 +110,9 @@ function fetchPart(fileName, paths) {
  *     request: string;
  *     response: PartGeometry
  *   };
- *   "load:colors": {
- *     request: undefined;
- *     response: readonly Color[];
- *   };
  *   "initialize": {
  *     request: undefined;
- *     response: undefined;
+ *     response: readonly  { code: number; rgba: number[] }[];
  *   }
  * }} Events
  *

@@ -12,11 +12,9 @@ export async function initialize() {
 
   const loader = new Loader(worker);
 
-  await loader.initialize();
+  const colors = await loader.initialize();
 
   Model.loader = loader;
-
-  const colors = await loader.loadColors();
 
   const gpuRenderer = await GpuRenderer.create(colors);
 
