@@ -1,9 +1,12 @@
 /** @import { PartGeometry } from "./part-geometry.js" */
 /** @import { Color } from "./ldraw.js" */
-import { loadPartGeometry } from "./part-loader-worker.js";
+/** @import { Loader } from "./part-loader-worker.js" */
 import * as matrix from "./matrix.js";
 
 export class Model {
+  /** @type {Loader} */
+  static loader;
+
   static #INITIAL_TRANSFORMATION = {
     rotateX: 60,
     rotateY: 0,
@@ -44,7 +47,7 @@ export class Model {
    * @param {Color} color
    */
   static async for(fileName, color) {
-    const geometry = await loadPartGeometry(fileName);
+    const geometry = await Model.loader.loadPartGeometry(fileName);
 
     return new Model(fileName, geometry, color);
   }

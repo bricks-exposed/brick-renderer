@@ -1,10 +1,9 @@
 import { GpuRenderer } from "./renderer.js";
-import { loadColors } from "./part-loader-worker.js";
 import { Model } from "./model.js";
 
 export class CanvasRenderer {
   /** @type {GpuRenderer} */
-  static #gpuRenderer;
+  static gpuRenderer;
 
   #renderFn;
 
@@ -19,12 +18,12 @@ export class CanvasRenderer {
     }
 
     context.configure({
-      device: CanvasRenderer.#gpuRenderer.device,
-      format: CanvasRenderer.#gpuRenderer.format,
+      device: CanvasRenderer.gpuRenderer.device,
+      format: CanvasRenderer.gpuRenderer.format,
       alphaMode: "premultiplied",
     });
 
-    this.#renderFn = CanvasRenderer.#gpuRenderer.prepare({
+    this.#renderFn = CanvasRenderer.gpuRenderer.prepare({
       width: canvas.width,
       height: canvas.height,
       createView() {
@@ -38,12 +37,5 @@ export class CanvasRenderer {
    */
   render(model) {
     this.#renderFn(model.color, model.transformation.matrix, model.geometry);
-  }
-
-  static async initialize() {
-    if (!CanvasRenderer.#gpuRenderer) {
-      const colors = await loadColors();
-      CanvasRenderer.#gpuRenderer = await GpuRenderer.create(colors);
-    }
   }
 }

@@ -1,26 +1,53 @@
-/** @import { Color } from "./ldraw.js" */
+/** @import { Color, Colors } from "./ldraw.js" */
 /** @import { PartGeometry } from "./part-geometry.js" */
+/** @import { TypedWorker, TypedInnerWorker } from "./async-worker.js" */
 import { PartDb } from "./part-db.js";
 import { ConfigurationLoader, FileLoader, PartLoader } from "./part-loader.js";
 import { getPartGeometry } from "./part-geometry.js";
 
-const { partLoader, colors } = await setup();
+/** @type {FileLoader} */
+let fileLoader;
 
-/** @type {(event: MessageEvent<Message>) => Promise<void>} */
-globalThis.onmessage = async function ({ data }) {
-  switch (data.type) {
+/** @type {PartLoader} */
+let partLoader;
+
+/** @type {Colors} */
+let colors;
+
+/** @type {TypedInnerWorker<Events>} */
+// @ts-expect-error
+const self = globalThis;
+
+self.onmessage = async function ({ data: { type, data, id } }) {
+  switch (type) {
+    case "initialize": {
+      const partDb = await PartDb.open();
+
+      fileLoader = new FileLoader(fetchPart, partDb);
+
+      partLoader = new PartLoader(fileLoader);
+
+      self.postMessage({
+        type: "initialize",
+        id,
+        success: true,
+        data: undefined,
+      });
+
+      return;
+    }
     case "load:part": {
       try {
-        const part = await partLoader.load(data.fileName);
+        const part = await partLoader.load(data);
 
         const geometry = getPartGeometry(colors, part);
 
-        sendMessage(
+        self.postMessage(
           {
             type: "load:part",
-            id: data.id,
-            status: "success",
-            geometry,
+            id,
+            success: true,
+            data: geometry,
           },
           [
             geometry.lines.buffer,
@@ -30,10 +57,10 @@ globalThis.onmessage = async function ({ data }) {
           ]
         );
       } catch (e) {
-        sendMessage({
+        self.postMessage({
           type: "load:part",
-          id: data.id,
-          status: "error",
+          id,
+          success: false,
           error: e instanceof Error ? e.toString() : "Unknown load error",
         });
       }
@@ -41,10 +68,13 @@ globalThis.onmessage = async function ({ data }) {
       return;
     }
     case "load:colors": {
-      sendMessage({
+      colors ??= (await new ConfigurationLoader(fileLoader).load()).colors;
+
+      self.postMessage({
         type: "load:colors",
-        id: data.id,
-        colors: colors.all,
+        id,
+        success: true,
+        data: colors.all,
       });
 
       return;
@@ -70,65 +100,22 @@ function fetchPart(fileName, paths) {
   );
 }
 
-sendMessage({ type: "ready" });
-
 /**
- * @typedef {{
- *   type: "load:part";
- *   id: string;
- *   fileName: string;
- * } | {
- *   type: "load:colors";
- *   id: string;
- * }} Message
  *
  * @typedef {{
- *   type: "ready"
- * } | {
- *   type: "load:colors";
- *   id: string;
- *   colors: readonly Color[]
- * } | ({
- *   type: "load:part";
- *   id: string;
- * } & (
- * {
- *   status: "success"
- *   geometry: PartGeometry;
- * } | {
- *   status: "error";
- *   error: string;
- * })
- * )} Response
+ *   "load:part": {
+ *     request: string;
+ *     response: PartGeometry
+ *   };
+ *   "load:colors": {
+ *     request: undefined;
+ *     response: readonly Color[];
+ *   };
+ *   "initialize": {
+ *     request: undefined;
+ *     response: undefined;
+ *   }
+ * }} Events
  *
- * @typedef {Omit<Worker, 'postMessage'>
- * & {
- *   postMessage(message: Message, transfer?: Transferable[]): void;
- *   addEventListener(
- *     type: "message",
- *     handler: (event: MessageEvent<Response>) => void,
- *     options?: boolean | AddEventListenerOptions
- *   ): void;
- * }} PartWorker
+ * @typedef {TypedWorker<Events>} PartWorker
  */
-
-/**
- * @param {Response} response
- * @param {Transferable[]} [transfer]
- */
-function sendMessage(response, transfer) {
-  // @ts-expect-error Typescript doesn't know we're in a worker file
-  globalThis.postMessage(response, transfer);
-}
-
-async function setup() {
-  const partDb = await PartDb.open();
-
-  const fileLoader = new FileLoader(fetchPart, partDb);
-
-  const partLoader = new PartLoader(fileLoader);
-
-  const configuration = await new ConfigurationLoader(fileLoader).load();
-
-  return { partLoader, colors: configuration.colors };
-}

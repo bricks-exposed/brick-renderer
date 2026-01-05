@@ -106,8 +106,6 @@ styleSheet.replaceSync(`
   }
 `);
 
-await CanvasRenderer.initialize();
-
 export class BrickRenderer extends HTMLElement {
   static #FILE_ATTRIBUTE = "file";
 
@@ -304,5 +302,3 @@ export class BrickRenderer extends HTMLElement {
     return svg;
   }
 }
-
-customElements.define("brick-renderer", BrickRenderer);

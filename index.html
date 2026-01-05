@@ -8,10 +8,14 @@
         color-scheme: light dark;
       }
     </style>
-    <script src="./brick-renderer.js" type="module"></script>
   </head>
   <body>
     <brick-renderer file="car.ldr"></brick-renderer>
-    <brick-renderer file="3001.dat" color="#a277b1"></brick-renderer>
+    <brick-renderer file="76537.dat" color="#a277b1"></brick-renderer>
+    <script type="module">
+      import { initialize } from "./index.js";
+
+      await initialize();
+    </script>
   </body>
 </html>
