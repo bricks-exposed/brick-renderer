@@ -1,4 +1,4 @@
-/** @import { Transform } from "./ldraw.js" */
+/** @import { Matrix } from "./matrix.js" */
 /** @import { PartGeometry } from "./part-geometry.js"  */
 import { Color, Colors } from "./ldraw.js";
 
@@ -18,32 +18,14 @@ export class GpuRenderer {
 
   #transparentTrianglePipeline;
 
+  #bindGroupLayout;
+
+  #colorTexture;
+
   /**
-   * @param {HTMLCanvasElement | OffscreenCanvas} canvas
+   * @type {Map<string, PreparedGeometry>}
    */
-  configure(canvas) {
-    const context = canvas.getContext("webgpu");
-
-    if (!context) {
-      throw new Error("Could not get canvas webgpu context");
-    }
-
-    context.configure({
-      device: this.device,
-      format: this.format,
-      alphaMode: "premultiplied",
-    });
-
-    const renderFn = this.prepare({
-      width: canvas.width,
-      height: canvas.height,
-      createView() {
-        return context.getCurrentTexture().createView();
-      },
-    });
-
-    return renderFn;
-  }
+  #preparedGeometries = new Map();
 
   /**
    *
@@ -78,18 +60,17 @@ export class GpuRenderer {
 
     /**
      * @param {Color} color
-     * @param {import("./matrix.js").Matrix} transformedMatrix
-     * @param {ReturnType<typeof this.prepareGeometry>} geometry
+     * @param {Matrix} transformMatrix
+     * @param {PartGeometry} geometry
      */
-    return function (
-      color,
-      transformedMatrix,
-      { lines, optionalLines, opaqueTriangles, transparentTriangles }
-    ) {
+    return (color, transformMatrix, geometry) => {
+      const { lines, optionalLines, opaqueTriangles, transparentTriangles } =
+        this.#prepareGeometry(geometry);
+
       device.queue.writeBuffer(
         uniformBuffer,
         0,
-        new Float32Array(transformedMatrix)
+        new Float32Array(transformMatrix)
       );
 
       device.queue.writeBuffer(colorBuffer, 0, new Float32Array(color.rgba));
@@ -129,8 +110,16 @@ export class GpuRenderer {
 
   /**
    * @param {PartGeometry} geometry
+   *
+   * @returns {PreparedGeometry}
    */
-  prepareGeometry(geometry) {
+  #prepareGeometry(geometry) {
+    const cachedGeometry = this.#preparedGeometries.get(geometry.fileName);
+
+    if (cachedGeometry) {
+      return cachedGeometry;
+    }
+
     const lines = this.#loadGeometry(
       new Float32Array(geometry.lines),
       3,
@@ -156,12 +145,16 @@ export class GpuRenderer {
       this.#transparentTrianglePipeline
     );
 
-    return {
+    const preparedGeometry = {
       lines,
       optionalLines,
       opaqueTriangles,
       transparentTriangles,
     };
+
+    this.#preparedGeometries.set(geometry.fileName, preparedGeometry);
+
+    return preparedGeometry;
   }
 
   /**
@@ -204,7 +197,6 @@ export class GpuRenderer {
   constructor(device, format, colors) {
     this.device = device;
     this.format = format;
-    this.colors = colors;
 
     const highestCode = colors.all.reduce(
       (acc, { code }) => Math.max(acc, code),
@@ -218,20 +210,20 @@ export class GpuRenderer {
       textureData.set(color.rgba, color.code * 4);
     }
 
-    this.colorTexture = device.createTexture({
+    this.#colorTexture = device.createTexture({
       label: "Color map texture",
       format: "rgba8unorm",
       size: { width: textureWidth, height: textureHeight },
       usage: GPUTextureUsage.COPY_DST | GPUTextureUsage.TEXTURE_BINDING,
     });
     device.queue.writeTexture(
-      { texture: this.colorTexture },
+      { texture: this.#colorTexture },
       textureData,
       { bytesPerRow: textureWidth * 4 },
       { width: textureWidth, height: textureHeight }
     );
 
-    this.bindGroupLayout = device.createBindGroupLayout({
+    this.#bindGroupLayout = device.createBindGroupLayout({
       label: "Rotation and color uniform bind group layout",
       entries: [
         {
@@ -257,7 +249,7 @@ export class GpuRenderer {
 
     const pipelineLayout = device.createPipelineLayout({
       label: "Rotation uniform pipeline layout",
-      bindGroupLayouts: [this.bindGroupLayout],
+      bindGroupLayouts: [this.#bindGroupLayout],
     });
 
     const edgeShaderModule = device.createShaderModule({
@@ -427,7 +419,7 @@ export class GpuRenderer {
   #createBindGroup(uniformBuffer, colorBuffer) {
     return this.device.createBindGroup({
       label: "Rotation uniform group",
-      layout: this.bindGroupLayout,
+      layout: this.#bindGroupLayout,
       entries: [
         {
           binding: 0,
@@ -439,7 +431,7 @@ export class GpuRenderer {
         },
         {
           binding: 2,
-          resource: this.colorTexture.createView(),
+          resource: this.#colorTexture.createView(),
         },
       ],
     });
@@ -469,6 +461,8 @@ export class GpuRenderer {
  *   pipeline: GPURenderPipeline;
  *   vertexCount?: number | undefined;
  * }} GeometryRenderDescriptor
+ *
+ * @typedef {Record<"lines" | "optionalLines" | "opaqueTriangles" | "transparentTriangles", GeometryRenderDescriptor>} PreparedGeometry
  */
 
 const EDGE_SHADER = `

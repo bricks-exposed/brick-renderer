@@ -1,9 +1,8 @@
-/** @import { Transform } from "./ldraw.js" */
 import { Colors, Part } from "./ldraw.js";
-import * as matrix from "./matrix.js";
 
 /**
  * @typedef {{
+ *   fileName: string;
  *   lines: Float32Array<ArrayBuffer>;
  *   optionalLines: Float32Array<ArrayBuffer>;
  *   opaqueTriangles: Float32Array<ArrayBuffer>;
@@ -57,6 +56,7 @@ export function getPartGeometry(colors, part) {
   }
 
   return {
+    fileName: part.file.name,
     lines: new Float32Array(lines),
     optionalLines: new Float32Array(optionalLines),
     opaqueTriangles: new Float32Array(opaqueTriangles),
@@ -64,34 +64,4 @@ export function getPartGeometry(colors, part) {
     viewBox,
     center,
   };
-}
-
-/**
- * @param {PartGeometry} geometry
- * @param {Transform} transform
- */
-export function transformMatrix(geometry, transform) {
-  return matrix.transform(
-    [
-      matrix.orthographic(
-        -geometry.viewBox,
-        geometry.viewBox,
-        -geometry.viewBox,
-        geometry.viewBox,
-        -(geometry.viewBox * 5),
-        geometry.viewBox * 5
-      ),
-      matrix.fromScaling(transform.scale),
-      matrix.fromRotationX(transform.rotateX),
-      matrix.fromRotationY(transform.rotateY),
-      matrix.fromRotationZ(transform.rotateZ),
-      // matrix.fromScaling(transform.scale),
-      matrix.fromTranslation(
-        -geometry.center[0],
-        -geometry.center[1],
-        -geometry.center[2]
-      ),
-    ],
-    matrix.identity
-  );
 }

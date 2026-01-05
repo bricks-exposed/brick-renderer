@@ -12,79 +12,77 @@ await new Promise((resolve) => {
   worker.addEventListener("message", resolve, { once: true });
 });
 
-export class PartLoader {
-  /** @type {Map<string, Promise<PartGeometry>>} */
-  #cachedPartRequests = new Map();
+/** @type {Promise<Colors> | undefined} */
+let cachedColorRequest;
 
-  /** @type {Promise<Colors> | undefined} */
-  #cachedColorRequest;
+/** @type {Map<string, Promise<PartGeometry>>} */
+const cachedPartRequests = new Map();
 
-  /**
-   * @param {string} fileName
-   *
-   * @returns {Promise<PartGeometry>}
-   */
-  async load(fileName) {
-    const cachedPartRequest = this.#cachedPartRequests.get(fileName);
+/**
+ * @param {string} fileName
+ *
+ * @returns {Promise<PartGeometry>}
+ */
+export async function loadPartGeometry(fileName) {
+  const cachedPartRequest = cachedPartRequests.get(fileName);
 
-    if (cachedPartRequest) {
-      return cachedPartRequest;
-    }
-
-    const id = crypto.randomUUID();
-
-    /** @type {Promise<PartGeometry>} */
-    const promise = new Promise((resolve, reject) => {
-      worker.addEventListener("message", function handler({ data }) {
-        if (data.type === "load:part" && data.id === id) {
-          worker.removeEventListener("message", handler);
-          if (data.status === "success") {
-            resolve(data.geometry);
-          } else {
-            reject(data.error);
-          }
-        }
-      });
-    });
-
-    this.#cachedPartRequests.set(fileName, promise);
-
-    worker.postMessage({
-      type: "load:part",
-      id,
-      fileName,
-    });
-
-    return promise;
+  if (cachedPartRequest) {
+    return cachedPartRequest;
   }
 
-  /**
-   * @returns {Promise<Colors>}
-   */
-  async loadColors() {
-    if (this.#cachedColorRequest) {
-      return this.#cachedColorRequest;
-    }
+  const id = crypto.randomUUID();
 
-    const id = crypto.randomUUID();
-
-    /** @type {Promise<Colors>} */
-    const promise = new Promise((resolve, reject) => {
-      worker.addEventListener("message", function handler({ data }) {
-        if (data.type === "load:colors" && data.id === id) {
-          worker.removeEventListener("message", handler);
-          resolve(data.colors);
+  /** @type {Promise<PartGeometry>} */
+  const promise = new Promise((resolve, reject) => {
+    worker.addEventListener("message", function handler({ data }) {
+      if (data.type === "load:part" && data.id === id) {
+        worker.removeEventListener("message", handler);
+        if (data.status === "success") {
+          resolve(data.geometry);
+        } else {
+          reject(data.error);
         }
-      });
-    }).then((c) => new Colors(c));
-
-    this.#cachedColorRequest = promise;
-
-    worker.postMessage({
-      type: "load:colors",
-      id,
+      }
     });
+  });
 
-    return promise;
+  cachedPartRequests.set(fileName, promise);
+
+  worker.postMessage({
+    type: "load:part",
+    id,
+    fileName,
+  });
+
+  return promise;
+}
+
+/**
+ * @returns {Promise<Colors>}
+ */
+export async function loadColors() {
+  if (cachedColorRequest) {
+    return cachedColorRequest;
   }
+
+  const id = crypto.randomUUID();
+
+  /** @type {Promise<Colors>} */
+  const promise = new Promise((resolve, reject) => {
+    worker.addEventListener("message", function handler({ data }) {
+      if (data.type === "load:colors" && data.id === id) {
+        worker.removeEventListener("message", handler);
+        resolve(data.colors);
+      }
+    });
+  }).then((c) => new Colors(c));
+
+  cachedColorRequest = promise;
+
+  worker.postMessage({
+    type: "load:colors",
+    id,
+  });
+
+  return promise;
 }

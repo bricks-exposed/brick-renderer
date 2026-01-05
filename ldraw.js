@@ -104,15 +104,6 @@ export class Part {
   }
 }
 
-/**
- * @typedef {{
- *   rotateX: number;
- *   rotateY: number;
- *   rotateZ: number;
- *   scale: number;
- * }} Transform
- */
-
 /** @typedef {[number, number, number]} Coordinate */
 
 /** @typedef {[Coordinate, Coordinate, Coordinate]} Triangle */

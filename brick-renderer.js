@@ -1,7 +1,6 @@
+import { CanvasRenderer } from "./canvas-renderer.js";
 import { Color } from "./ldraw.js";
-import { GpuRenderer } from "./renderer.js";
-import { PartLoader } from "./part-loader-worker.js";
-import { transformMatrix } from "./part-geometry.js";
+import { Model } from "./model.js";
 
 const styleSheet = new CSSStyleSheet();
 styleSheet.replaceSync(`
@@ -107,7 +106,7 @@ styleSheet.replaceSync(`
   }
 `);
 
-const { gpuRenderer, partGeometryLoader } = await setup();
+await CanvasRenderer.initialize();
 
 export class BrickRenderer extends HTMLElement {
   static #FILE_ATTRIBUTE = "file";
@@ -119,13 +118,6 @@ export class BrickRenderer extends HTMLElement {
     BrickRenderer.#COLOR_ATTRIBUTE,
   ];
 
-  static #INITIAL_TRANSFORM = {
-    rotateX: 60,
-    rotateY: 0,
-    rotateZ: 45,
-    scale: 0.6,
-  };
-
   static #INITIAL_COLOR = "#e04d4d";
 
   constructor() {
@@ -134,7 +126,6 @@ export class BrickRenderer extends HTMLElement {
     this.color =
       this.getAttribute(BrickRenderer.#COLOR_ATTRIBUTE) ??
       BrickRenderer.#INITIAL_COLOR;
-    this.transform = { ...BrickRenderer.#INITIAL_TRANSFORM };
 
     const shadow = this.attachShadow({ mode: "open" });
     shadow.adoptedStyleSheets = [styleSheet];
@@ -163,9 +154,7 @@ export class BrickRenderer extends HTMLElement {
       passive: true,
     });
 
-    this.renderer = gpuRenderer.configure(this.canvas);
-
-    this.partLoader = partGeometryLoader;
+    this.renderer = new CanvasRenderer(this.canvas);
 
     this.form = this.#createForm();
 
@@ -219,34 +208,24 @@ export class BrickRenderer extends HTMLElement {
       return;
     }
 
-    this.transform = {
-      ...this.transform,
-      rotateZ: (this.transform.rotateZ + event.movementX) % 360,
-      rotateX: (this.transform.rotateX - event.movementY) % 360,
-    };
+    this.model?.transformation.rotateBy({
+      z: event.movementX,
+      x: -event.movementY,
+    });
 
     this.update();
   };
 
   update() {
-    if (!this.geometry || !this.preparedGeometry) {
+    if (!this.model) {
       return;
     }
 
-    const { rotateX, rotateY, rotateZ } = this.transform;
-
-    const transform = transformMatrix(this.geometry, {
-      ...this.transform,
-      rotateX: (rotateX * Math.PI) / 180,
-      rotateY: (rotateY * Math.PI) / 180,
-      rotateZ: (rotateZ * Math.PI) / 180,
-    });
-
-    this.renderer(Color.custom(this.color), transform, this.preparedGeometry);
+    this.renderer.render(this.model);
   }
 
   reset() {
-    this.transform = { ...BrickRenderer.#INITIAL_TRANSFORM };
+    this.model?.transformation.reset();
     this.update();
   }
 
@@ -254,22 +233,13 @@ export class BrickRenderer extends HTMLElement {
    * @param {string} fileName
    */
   async load(fileName) {
-    const geometry = await this.partLoader.load(fileName);
-    this.geometry = geometry;
-    this.preparedGeometry = gpuRenderer.prepareGeometry(geometry);
+    this.model = await Model.for(fileName, Color.custom(this.color));
   }
 
   #createForm() {
     const form = document.createElement("form");
 
-    const scale = this.#createSlider(
-      "Scale",
-      "scale",
-      (BrickRenderer.#INITIAL_TRANSFORM.scale * 100).toString(),
-      "10",
-      "200",
-      "1"
-    );
+    const scale = this.#createSlider("Scale", "scale", "60", "10", "200", "1");
 
     const reset = document.createElement("button");
     reset.ariaLabel = "Reset";
@@ -305,7 +275,7 @@ export class BrickRenderer extends HTMLElement {
     input.defaultValue = value;
 
     const update = () => {
-      this.transform.scale = Number.parseFloat(input.value) / 100;
+      this.model?.transformation.scale(Number.parseFloat(input.value) / 100);
 
       this.update();
     };
@@ -333,16 +303,6 @@ export class BrickRenderer extends HTMLElement {
 
     return svg;
   }
-}
-
-async function setup() {
-  const partGeometryLoader = new PartLoader();
-
-  const colors = await partGeometryLoader.loadColors();
-
-  const gpuRenderer = await GpuRenderer.create(colors);
-
-  return { gpuRenderer, partGeometryLoader };
 }
 
 customElements.define("brick-renderer", BrickRenderer);
