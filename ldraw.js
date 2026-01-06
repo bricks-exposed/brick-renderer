@@ -155,7 +155,12 @@ export class File {
     for (const line of rawLines) {
       const points = line.points.flat();
       if (line.controlPoints) {
-        optionalLines.push(...points, ...line.controlPoints.flat());
+        optionalLines.push(
+          ...points,
+          ...line.controlPoints.flat(),
+          ...points,
+          ...line.controlPoints.flat()
+        );
       } else {
         lines.push(...points);
       }

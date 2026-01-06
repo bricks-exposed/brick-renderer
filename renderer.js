@@ -22,6 +22,8 @@ export class GpuRenderer {
 
   #studLinePipeline;
 
+  #studOptionalLinePipeline;
+
   /** @type {*} */
   #preparedStudGeometry;
 
@@ -124,6 +126,11 @@ export class GpuRenderer {
         pass.setVertexBuffer(0, studs.buffer);
         pass.setVertexBuffer(1, studss.lines.buffer);
         pass.draw(studss.lines.count, studs.count);
+
+        pass.setPipeline(this.#studOptionalLinePipeline);
+        pass.setVertexBuffer(0, studs.buffer);
+        pass.setVertexBuffer(1, studss.optionalLines.buffer);
+        pass.draw(studss.optionalLines.count, studs.count);
       }
 
       GpuRenderer.#renderGeometryDescriptor(pass, lines);
@@ -153,8 +160,7 @@ export class GpuRenderer {
     const optionalLines = this.#loadGeometry(
       geometry.optionalLines,
       12,
-      this.#optionalLinePipeline,
-      2
+      this.#optionalLinePipeline
     );
 
     const opaqueTriangles = this.#loadGeometry(
@@ -570,6 +576,88 @@ export class GpuRenderer {
       },
     });
 
+    const studOptionalLineShaderModule = device.createShaderModule({
+      label: "Stud optional line shader",
+      code: STUD_OPTIONAL_LINE_SHADER,
+    });
+
+    this.#studOptionalLinePipeline = device.createRenderPipeline({
+      label: "Stud optional line pipeline",
+      layout: pipelineLayout,
+      primitive: { topology: "line-list" },
+      depthStencil: DEPTH_STENCIL,
+      vertex: {
+        module: studOptionalLineShaderModule,
+        entryPoint: "vertexMain",
+        buffers: [
+          {
+            arrayStride: 17 * 4,
+            stepMode: "instance",
+            attributes: [
+              // 4 matrix columns
+              {
+                format: "float32x4",
+                offset: 0,
+                shaderLocation: 0,
+              },
+              {
+                format: "float32x4",
+                offset: 16,
+                shaderLocation: 1,
+              },
+              {
+                format: "float32x4",
+                offset: 32,
+                shaderLocation: 2,
+              },
+              {
+                format: "float32x4",
+                offset: 48,
+                shaderLocation: 3,
+              },
+              // Color code (unused for lines)
+              {
+                format: "float32",
+                offset: 64,
+                shaderLocation: 4,
+              },
+            ],
+          },
+          {
+            // (p1, p2, c1, c2) = 12 floats
+            arrayStride: 12 * 4,
+            attributes: [
+              {
+                format: "float32x3",
+                offset: 0,
+                shaderLocation: 5, // point 1
+              },
+              {
+                format: "float32x3",
+                offset: 12,
+                shaderLocation: 6, // point 2
+              },
+              {
+                format: "float32x3",
+                offset: 24,
+                shaderLocation: 7, // control point 1
+              },
+              {
+                format: "float32x3",
+                offset: 36,
+                shaderLocation: 8, // control point 2
+              },
+            ],
+          },
+        ],
+      },
+      fragment: {
+        module: studOptionalLineShaderModule,
+        entryPoint: "fragmentMain",
+        targets: [{ format }],
+      },
+    });
+
     const optionalLineShaderModule = device.createShaderModule({
       label: "Optional line shader",
       code: OPTIONAL_LINE_SHADER,
@@ -585,9 +673,8 @@ export class GpuRenderer {
         entryPoint: "vertexMain",
         buffers: [
           {
-            // Instance buffer: 4 vec3f points (p1, p2, c1, c2) = 12 floats
+            // (p1, p2, c1, c2) = 12 floats
             arrayStride: 12 * 4,
-            stepMode: "instance",
             attributes: [
               {
                 format: "float32x3",
@@ -869,11 +956,19 @@ const STUD_LINE_SHADER = `
 // dot((ci - p1) x (p2 - p1), view) > 0
 
 const STUD_OPTIONAL_LINE_SHADER = `
+  struct InstanceInput {
+    @location(0) column1: vec4f,
+    @location(1) column2: vec4f,
+    @location(2) column3: vec4f,
+    @location(3) column4: vec4f,
+    @location(4) color: f32,
+  }
+
   struct VertexInput {
-    @location(0) p1: vec4f,
-    @location(1) p2: vec4f,
-    @location(2) c1: vec4f,
-    @location(3) c2: vec4f,
+    @location(5) p1: vec4f,
+    @location(6) p2: vec4f,
+    @location(7) c1: vec4f,
+    @location(8) c2: vec4f,
   }
 
   struct VertexOutput {
@@ -885,13 +980,21 @@ const STUD_OPTIONAL_LINE_SHADER = `
 
   @vertex
   fn vertexMain(
-    input: VertexInput,
+    instance: InstanceInput,
+    vertex: VertexInput,
     @builtin(vertex_index) vertexIndex: u32
   ) -> VertexOutput {
-    let p1 = rotationMatrix * input.p1;
-    let p2 = rotationMatrix * input.p2;
-    let c1 = rotationMatrix * input.c1;
-    let c2 = rotationMatrix * input.c2;
+    let instanceMatrix = mat4x4f(
+      instance.column1,
+      instance.column2,
+      instance.column3,
+      instance.column4
+    );
+    let projection = rotationMatrix * instanceMatrix;
+    let p1 = projection * vertex.p1;
+    let p2 = projection * vertex.p2;
+    let c1 = projection * vertex.c1;
+    let c2 = projection * vertex.c2;
 
     let edge = (p2 - p1).xyz;
     let toC1 = (c1 - p1).xyz;
