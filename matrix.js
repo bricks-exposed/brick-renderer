@@ -162,21 +162,33 @@ export function fromScaling(factor) {
 }
 
 /**
- * @param {number[]} matrix3x3
+ * @param {number} a
+ * @param {number} b
+ * @param {number} c
+ * @param {number} d
+ * @param {number} e
+ * @param {number} f
+ * @param {number} g
+ * @param {number} h
+ * @param {number} i
  */
-export function determinant([a, d, g, b, e, h, c, f, i]) {
+export function determinant(a, b, c, d, e, f, g, h, i) {
   return a * e * i + b * f * g + c * d * h - c * e * g - b * d * i - a * f * h;
 }
 
 /**
  *
  * @param {Matrix} a
- * @param {Matrix | null | undefined} b
+ * @param {Matrix} b
  *
  * @returns {Matrix}
  */
 export function multiply(a, b) {
-  if (!b) {
+  if (a === identity) {
+    return b;
+  }
+
+  if (b === identity) {
     return a;
   }
 

@@ -34,8 +34,14 @@ export class CanvasRenderer {
 
   /**
    * @param {Model} model
+   * @param {Model} stud
    */
-  render(model) {
-    this.#renderFn(model.color, model.transformation.matrix, model.geometry);
+  render(model, stud) {
+    this.#renderFn(
+      model.color,
+      model.transformation.matrix,
+      model.geometry,
+      stud.geometry
+    );
   }
 }

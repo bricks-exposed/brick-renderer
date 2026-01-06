@@ -118,6 +118,12 @@ export class BrickRenderer extends HTMLElement {
 
   static #INITIAL_COLOR = "#e04d4d";
 
+  /** @type {Model | undefined} */
+  model;
+
+  /** @type {Model | undefined} */
+  stud;
+
   constructor() {
     super();
 
@@ -162,11 +168,12 @@ export class BrickRenderer extends HTMLElement {
   }
 
   async connectedCallback() {
+    this.stud ??= await Model.for("stud.dat", Color.custom(this.color));
+
     if (!this.file) {
       return;
     }
 
-    await this.load(this.file);
     this.update();
   }
 
@@ -215,11 +222,11 @@ export class BrickRenderer extends HTMLElement {
   };
 
   update() {
-    if (!this.model) {
+    if (!this.model || !this.stud) {
       return;
     }
 
-    this.renderer.render(this.model);
+    this.renderer.render(this.model, this.stud);
   }
 
   reset() {
@@ -231,6 +238,10 @@ export class BrickRenderer extends HTMLElement {
    * @param {string} fileName
    */
   async load(fileName) {
+    if (this.model?.fileName === fileName) {
+      return;
+    }
+
     this.model = await Model.for(fileName, Color.custom(this.color));
   }
 
