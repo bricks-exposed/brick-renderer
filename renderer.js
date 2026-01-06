@@ -71,9 +71,9 @@ export class GpuRenderer {
      * @param {Color} color
      * @param {Matrix} transformMatrix
      * @param {PartGeometry} geometry
-     * @param {PartGeometry} studGeometry
+     * @param {PartGeometry} stud
      */
-    return (color, transformMatrix, geometry, studGeometry) => {
+    return (color, transformMatrix, geometry, stud) => {
       const {
         lines,
         optionalLines,
@@ -82,7 +82,7 @@ export class GpuRenderer {
         studs,
       } = this.#prepareGeometry(geometry);
 
-      const studss = this.#prepareStudGeometry(studGeometry);
+      const studGeometry = this.#prepareStudGeometry(stud);
 
       device.queue.writeBuffer(
         uniformBuffer,
@@ -114,28 +114,40 @@ export class GpuRenderer {
 
       pass.setBindGroup(0, bindGroup);
 
-      GpuRenderer.#renderGeometryDescriptor(pass, opaqueTriangles);
+      GpuRenderer.#renderGeometryDescriptor(
+        pass,
+        opaqueTriangles,
+        this.#opaqueTrianglePipeline
+      );
+      GpuRenderer.#renderGeometryDescriptor(pass, lines, this.#linePipeline);
+      GpuRenderer.#renderGeometryDescriptor(
+        pass,
+        optionalLines,
+        this.#optionalLinePipeline
+      );
 
       if (studs.count) {
-        pass.setPipeline(this.#studTrianglePipeline);
-        pass.setVertexBuffer(0, studs.buffer);
-        pass.setVertexBuffer(1, studss.triangles.buffer);
-        pass.draw(studss.triangles.count, studs.count);
-
         pass.setPipeline(this.#studLinePipeline);
         pass.setVertexBuffer(0, studs.buffer);
-        pass.setVertexBuffer(1, studss.lines.buffer);
-        pass.draw(studss.lines.count, studs.count);
+        pass.setVertexBuffer(1, studGeometry.lines.buffer);
+        pass.draw(studGeometry.lines.count, studs.count);
 
         pass.setPipeline(this.#studOptionalLinePipeline);
         pass.setVertexBuffer(0, studs.buffer);
-        pass.setVertexBuffer(1, studss.optionalLines.buffer);
-        pass.draw(studss.optionalLines.count, studs.count);
+        pass.setVertexBuffer(1, studGeometry.optionalLines.buffer);
+        pass.draw(studGeometry.optionalLines.count, studs.count);
+
+        pass.setPipeline(this.#studTrianglePipeline);
+        pass.setVertexBuffer(0, studs.buffer);
+        pass.setVertexBuffer(1, studGeometry.triangles.buffer);
+        pass.draw(studGeometry.triangles.count, studs.count);
       }
 
-      GpuRenderer.#renderGeometryDescriptor(pass, lines);
-      GpuRenderer.#renderGeometryDescriptor(pass, optionalLines);
-      GpuRenderer.#renderGeometryDescriptor(pass, transparentTriangles);
+      GpuRenderer.#renderGeometryDescriptor(
+        pass,
+        transparentTriangles,
+        this.#transparentTrianglePipeline
+      );
 
       pass.end();
 
@@ -155,30 +167,20 @@ export class GpuRenderer {
       return cachedGeometry;
     }
 
-    const lines = this.#loadGeometry(geometry.lines, 3, this.#linePipeline);
+    const lines = this.#loadGeometry(geometry.lines, 3);
 
-    const optionalLines = this.#loadGeometry(
-      geometry.optionalLines,
-      12,
-      this.#optionalLinePipeline
-    );
+    const optionalLines = this.#loadGeometry(geometry.optionalLines, 12);
 
-    const opaqueTriangles = this.#loadGeometry(
-      geometry.opaqueTriangles,
-      4,
-      this.#opaqueTrianglePipeline
-    );
+    const opaqueTriangles = this.#loadGeometry(geometry.opaqueTriangles, 4);
 
     const transparentTriangles = this.#loadGeometry(
       geometry.transparentTriangles,
-      4,
-      this.#transparentTrianglePipeline
+      4
     );
 
     const studs = this.#loadGeometry(
       geometry.studs,
-      17, // 16 matrix points, 1 color code
-      this.#studTrianglePipeline
+      17 // 16 matrix points, 1 color code
     );
 
     const preparedGeometry = {
@@ -196,26 +198,23 @@ export class GpuRenderer {
 
   /**
    * @param {PartGeometry} geometry
+   *
+   * @returns {{
+   *   lines: GeometryRenderDescriptor;
+   *   optionalLines: GeometryRenderDescriptor;
+   *   triangles: GeometryRenderDescriptor;
+   * }}
    */
   #prepareStudGeometry(geometry) {
     if (this.#preparedStudGeometry) {
       return this.#preparedStudGeometry;
     }
 
-    const lines = this.#loadGeometry(geometry.lines, 3, this.#linePipeline);
+    const lines = this.#loadGeometry(geometry.lines, 3);
 
-    const optionalLines = this.#loadGeometry(
-      geometry.optionalLines,
-      12,
-      this.#optionalLinePipeline,
-      2
-    );
+    const optionalLines = this.#loadGeometry(geometry.optionalLines, 12);
 
-    const triangles = this.#loadGeometry(
-      geometry.transparentTriangles,
-      4,
-      this.#transparentTrianglePipeline
-    );
+    const triangles = this.#loadGeometry(geometry.transparentTriangles, 4);
 
     this.#preparedStudGeometry = { lines, optionalLines, triangles };
 
@@ -225,13 +224,14 @@ export class GpuRenderer {
   /**
    * @param {GPURenderPassEncoder} pass
    * @param {GeometryRenderDescriptor} geometry
+   * @param {GPURenderPipeline} pipeline
    */
-  static #renderGeometryDescriptor(pass, geometry) {
+  static #renderGeometryDescriptor(pass, geometry, pipeline) {
     if (geometry.count === 0) {
       return;
     }
 
-    pass.setPipeline(geometry.pipeline);
+    pass.setPipeline(pipeline);
     pass.setVertexBuffer(0, geometry.buffer);
     geometry.vertexCount != null
       ? pass.draw(geometry.vertexCount, geometry.count)
@@ -241,10 +241,8 @@ export class GpuRenderer {
   /**
    * @param {Float32Array<ArrayBuffer>} data
    * @param {number} itemSize
-   * @param {GPURenderPipeline} pipeline
-   * @param {number} [vertexCount]
    */
-  #loadGeometry(data, itemSize, pipeline, vertexCount) {
+  #loadGeometry(data, itemSize) {
     const buffer = this.device.createBuffer({
       size: data.byteLength,
       usage: GPUBufferUsage.COPY_DST | GPUBufferUsage.VERTEX,
@@ -252,7 +250,7 @@ export class GpuRenderer {
 
     this.device.queue.writeBuffer(buffer, 0, data);
 
-    return { buffer, pipeline, count: data.length / itemSize, vertexCount };
+    return { buffer, count: data.length / itemSize };
   }
 
   /**
@@ -439,7 +437,7 @@ export class GpuRenderer {
         ...trianglePipelineDescriptor.depthStencil,
 
         // Stud triangles shouldn't block other triangles
-        // depthWriteEnabled: false,
+        depthWriteEnabled: false,
       },
       layout: pipelineLayout,
       primitive: { cullMode: "back" },
@@ -754,7 +752,6 @@ export class GpuRenderer {
  * @typedef {{
  *   count: number;
  *   buffer: GPUBuffer;
- *   pipeline: GPURenderPipeline;
  *   vertexCount?: number | undefined;
  * }} GeometryRenderDescriptor
  *
