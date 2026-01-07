@@ -146,15 +146,10 @@ export class File {
     /** @type {number[]} */
     const optionalLines = [];
 
-    /** @type {number[]} */
-    const opaqueTriangles = [];
-
-    /** @type {number[]} */
-    const transparentTriangles = [];
-
     for (const line of rawLines) {
       const points = line.points.flat();
       if (line.controlPoints) {
+        // We need to draw
         optionalLines.push(
           ...points,
           ...line.controlPoints.flat(),
@@ -166,27 +161,38 @@ export class File {
       }
     }
 
-    for (const { vertices, color } of rawTriangles) {
-      const array = color.opaque ? opaqueTriangles : transparentTriangles;
-      for (const vertex of vertices) {
-        array.push(...vertex, color.code);
+    const triangleStride = 12; // Three (x1 y1 z1 c)
+
+    const triangles = new Float32Array(rawTriangles.length * triangleStride);
+
+    for (let i = 0; i < rawTriangles.length; i++) {
+      const { vertices, color } = rawTriangles[i];
+      for (let j = 0; j < vertices.length; j++) {
+        let index = i * triangleStride + j * 4;
+        const vertex = vertices[j];
+        for (let k = 0; k < vertex.length; k++) {
+          triangles[index + k] = vertex[k];
+        }
+        triangles[index + vertex.length] = color.code;
       }
     }
 
-    /** @type {number[]} */
-    const studs = [];
+    const studStride = 17; // 16 matrix + 1 color
+    const studs = new Float32Array(rawStuds.length * studStride);
 
-    for (const args of rawStuds) {
-      studs.push(...args.transformation, args.color.code);
+    for (let i = 0; i < rawStuds.length; i++) {
+      const args = rawStuds[i];
+      const index = i * studStride;
+      studs.set(args.transformation, index);
+      studs[index + 16] = args.color.code;
     }
 
     return {
       fileName: this.name,
       lines: new Float32Array(lines),
       optionalLines: new Float32Array(optionalLines),
-      opaqueTriangles: new Float32Array(opaqueTriangles),
-      transparentTriangles: new Float32Array(transparentTriangles),
-      studs: new Float32Array(studs),
+      triangles: triangles,
+      studs: studs,
       viewBox,
       center,
     };
@@ -485,19 +491,28 @@ class DrawGeometry extends DrawCommand {
    */
   static transform(transformation, coordinates) {
     return /** @type {T} */ (
-      coordinates.map(function ([x, y, z]) {
-        if (!transformation || transformation === matrix.identity) {
-          return [x, y, z];
-        }
-
-        const [a, b, c, , d, e, f, , g, h, i, , tx, ty, tz] = transformation;
-        return [
-          a * x + d * y + g * z + tx,
-          b * x + e * y + h * z + ty,
-          c * x + f * y + i * z + tz,
-        ];
-      })
+      coordinates.map((c) => this.transformCoordinate(transformation, c))
     );
+  }
+
+  /**
+   * @param {Matrix | null | undefined} transformation
+   * @param {Coordinate} coordinate
+   *
+   * @returns {Coordinate}
+   */
+  static transformCoordinate(transformation, coordinate) {
+    if (!transformation || transformation === matrix.identity) {
+      return coordinate;
+    }
+
+    const [x, y, z] = coordinate;
+    const [a, b, c, , d, e, f, , g, h, i, , tx, ty, tz] = transformation;
+    return [
+      a * x + d * y + g * z + tx,
+      b * x + e * y + h * z + ty,
+      c * x + f * y + i * z + tz,
+    ];
   }
 }
 
@@ -848,8 +863,7 @@ export class Color {
  *   fileName: string;
  *   lines: Float32Array<ArrayBuffer>;
  *   optionalLines: Float32Array<ArrayBuffer>;
- *   opaqueTriangles: Float32Array<ArrayBuffer>;
- *   transparentTriangles: Float32Array<ArrayBuffer>;
+ *   triangles: Float32Array<ArrayBuffer>;
  *   studs: Float32Array<ArrayBuffer>;
  *   viewBox: number,
  *   center: [number, number, number],

@@ -74,8 +74,8 @@ self.onmessage = async function ({ data: { type, data, id } }) {
           [
             geometry.lines.buffer,
             geometry.optionalLines.buffer,
-            geometry.opaqueTriangles.buffer,
-            geometry.transparentTriangles.buffer,
+            geometry.triangles.buffer,
+            geometry.studs.buffer,
           ]
         );
       } catch (e) {

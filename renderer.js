@@ -18,14 +18,13 @@ export class GpuRenderer {
 
   #transparentTrianglePipeline;
 
-  #studTrianglePipeline;
+  #studOpaqueTrianglePipeline;
+
+  #studTransparentTrianglePipeline;
 
   #studLinePipeline;
 
   #studOptionalLinePipeline;
-
-  /** @type {*} */
-  #preparedStudGeometry;
 
   #bindGroupLayout;
 
@@ -74,15 +73,10 @@ export class GpuRenderer {
      * @param {PartGeometry} stud
      */
     return (color, transformMatrix, geometry, stud) => {
-      const {
-        lines,
-        optionalLines,
-        opaqueTriangles,
-        transparentTriangles,
-        studs,
-      } = this.#prepareGeometry(geometry);
+      const { lines, optionalLines, triangles, studs } =
+        this.#prepareGeometry(geometry);
 
-      const studGeometry = this.#prepareStudGeometry(stud);
+      const studGeometry = this.#prepareGeometry(stud);
 
       device.queue.writeBuffer(
         uniformBuffer,
@@ -116,7 +110,7 @@ export class GpuRenderer {
 
       GpuRenderer.#renderGeometryDescriptor(
         pass,
-        opaqueTriangles,
+        triangles,
         this.#opaqueTrianglePipeline
       );
       GpuRenderer.#renderGeometryDescriptor(pass, lines, this.#linePipeline);
@@ -127,27 +121,38 @@ export class GpuRenderer {
       );
 
       if (studs.count) {
+        if (studGeometry.triangles.count) {
+          pass.setPipeline(this.#studOpaqueTrianglePipeline);
+          pass.setVertexBuffer(0, studs.buffer);
+          pass.setVertexBuffer(1, studGeometry.triangles.buffer);
+          pass.draw(studGeometry.triangles.count, studs.count);
+        }
+
         pass.setPipeline(this.#studLinePipeline);
         pass.setVertexBuffer(0, studs.buffer);
         pass.setVertexBuffer(1, studGeometry.lines.buffer);
         pass.draw(studGeometry.lines.count, studs.count);
 
-        pass.setPipeline(this.#studOptionalLinePipeline);
-        pass.setVertexBuffer(0, studs.buffer);
-        pass.setVertexBuffer(1, studGeometry.optionalLines.buffer);
-        pass.draw(studGeometry.optionalLines.count, studs.count);
-
-        pass.setPipeline(this.#studTrianglePipeline);
-        pass.setVertexBuffer(0, studs.buffer);
-        pass.setVertexBuffer(1, studGeometry.triangles.buffer);
-        pass.draw(studGeometry.triangles.count, studs.count);
+        if (studGeometry.optionalLines.count) {
+          pass.setPipeline(this.#studOptionalLinePipeline);
+          pass.setVertexBuffer(0, studs.buffer);
+          pass.setVertexBuffer(1, studGeometry.optionalLines.buffer);
+          pass.draw(studGeometry.optionalLines.count, studs.count);
+        }
       }
 
       GpuRenderer.#renderGeometryDescriptor(
         pass,
-        transparentTriangles,
+        triangles,
         this.#transparentTrianglePipeline
       );
+
+      if (studs.count && studGeometry.triangles.count) {
+        pass.setPipeline(this.#studTransparentTrianglePipeline);
+        pass.setVertexBuffer(0, studs.buffer);
+        pass.setVertexBuffer(1, studGeometry.triangles.buffer);
+        pass.draw(studGeometry.triangles.count, studs.count);
+      }
 
       pass.end();
 
@@ -171,12 +176,7 @@ export class GpuRenderer {
 
     const optionalLines = this.#loadGeometry(geometry.optionalLines, 12);
 
-    const opaqueTriangles = this.#loadGeometry(geometry.opaqueTriangles, 4);
-
-    const transparentTriangles = this.#loadGeometry(
-      geometry.transparentTriangles,
-      4
-    );
+    const triangles = this.#loadGeometry(geometry.triangles, 4);
 
     const studs = this.#loadGeometry(
       geometry.studs,
@@ -186,39 +186,13 @@ export class GpuRenderer {
     const preparedGeometry = {
       lines,
       optionalLines,
-      opaqueTriangles,
-      transparentTriangles,
+      triangles,
       studs,
     };
 
     this.#preparedGeometries.set(geometry.fileName, preparedGeometry);
 
     return preparedGeometry;
-  }
-
-  /**
-   * @param {PartGeometry} geometry
-   *
-   * @returns {{
-   *   lines: GeometryRenderDescriptor;
-   *   optionalLines: GeometryRenderDescriptor;
-   *   triangles: GeometryRenderDescriptor;
-   * }}
-   */
-  #prepareStudGeometry(geometry) {
-    if (this.#preparedStudGeometry) {
-      return this.#preparedStudGeometry;
-    }
-
-    const lines = this.#loadGeometry(geometry.lines, 3);
-
-    const optionalLines = this.#loadGeometry(geometry.optionalLines, 12);
-
-    const triangles = this.#loadGeometry(geometry.transparentTriangles, 4);
-
-    this.#preparedStudGeometry = { lines, optionalLines, triangles };
-
-    return this.#preparedStudGeometry;
   }
 
   /**
@@ -316,12 +290,18 @@ export class GpuRenderer {
       bindGroupLayouts: [this.#bindGroupLayout],
     });
 
+    const edgeFragmentShaderModule = device.createShaderModule({
+      label: "Edge fragment shader",
+      code: EDGE_FRAGMENT_SHADER,
+    });
+
     const edgeShaderModule = device.createShaderModule({
       label: "Edge shader",
       code: EDGE_SHADER,
     });
 
-    this.#linePipeline = device.createRenderPipeline({
+    /** @satisfies {GPURenderPipelineDescriptor} */
+    const linePipelineDescriptor = {
       label: "Edge pipeline",
       layout: pipelineLayout,
       primitive: { topology: "line-list" },
@@ -343,10 +323,17 @@ export class GpuRenderer {
         ],
       },
       fragment: {
-        module: edgeShaderModule,
+        module: edgeFragmentShaderModule,
         entryPoint: "fragmentMain",
         targets: [{ format }],
       },
+    };
+
+    this.#linePipeline = device.createRenderPipeline(linePipelineDescriptor);
+
+    const triangleColorFragmentShader = device.createShaderModule({
+      label: "Triangle color fragment shader",
+      code: COLOR_FRAGMENT_SHADER,
     });
 
     const triangleShaderModule = device.createShaderModule({
@@ -404,7 +391,7 @@ export class GpuRenderer {
         ],
       },
       fragment: {
-        module: triangleShaderModule,
+        module: triangleColorFragmentShader,
         entryPoint: "fragmentMain",
         targets: [transparencyTarget],
       },
@@ -413,6 +400,12 @@ export class GpuRenderer {
     this.#opaqueTrianglePipeline = device.createRenderPipeline({
       ...trianglePipelineDescriptor,
       label: "Opaque triangle render pipeline",
+      fragment: {
+        ...trianglePipelineDescriptor.fragment,
+        constants: {
+          transparent: 0,
+        },
+      },
     });
 
     this.#transparentTrianglePipeline = device.createRenderPipeline({
@@ -424,85 +417,106 @@ export class GpuRenderer {
         // Transparent triangles shouldn't block other triangles
         depthWriteEnabled: false,
       },
+      fragment: {
+        ...trianglePipelineDescriptor.fragment,
+        constants: {
+          transparent: 1,
+        },
+      },
     });
+
+    /** @satisfies {GPUVertexBufferLayout} */
+    const studInstanceBuffers = {
+      arrayStride: 17 * 4,
+      stepMode: "instance",
+      attributes: [
+        // 4 matrix columns
+        {
+          format: "float32x4",
+          offset: 0,
+          shaderLocation: 0,
+        },
+        {
+          format: "float32x4",
+          offset: 16,
+          shaderLocation: 1,
+        },
+        {
+          format: "float32x4",
+          offset: 32,
+          shaderLocation: 2,
+        },
+        {
+          format: "float32x4",
+          offset: 48,
+          shaderLocation: 3,
+        },
+        // Color code (unused for lines)
+        {
+          format: "float32",
+          offset: 64,
+          shaderLocation: 4,
+        },
+      ],
+    };
+
+    /**
+     * @param {{ buffers: GPUVertexBufferLayout[]}} vertex
+     */
+    function offsetBuffersForStuds(vertex) {
+      return vertex.buffers.map((b) => ({
+        ...b,
+        attributes: [...b.attributes].map((a) => ({
+          ...a,
+          shaderLocation:
+            a.shaderLocation + studInstanceBuffers.attributes.length,
+        })),
+      }));
+    }
 
     const studTriangleShaderModule = device.createShaderModule({
       label: "Stud shader",
       code: STUD_TRIANGLE_SHADER,
     });
 
-    this.#studTrianglePipeline = device.createRenderPipeline({
-      label: "Stud triangle pipeline",
-      depthStencil: {
-        ...trianglePipelineDescriptor.depthStencil,
-
-        // Stud triangles shouldn't block other triangles
-        depthWriteEnabled: false,
-      },
-      layout: pipelineLayout,
-      primitive: { cullMode: "back" },
+    /** @satisfies {GPURenderPipelineDescriptor} */
+    const studTrianglePipelineDescriptor = {
+      ...trianglePipelineDescriptor,
       vertex: {
         module: studTriangleShaderModule,
         entryPoint: "vertexMain",
         buffers: [
-          {
-            arrayStride: 17 * 4,
-            stepMode: "instance",
-            attributes: [
-              // 4 matrix columns
-              {
-                format: "float32x4",
-                offset: 0,
-                shaderLocation: 0,
-              },
-              {
-                format: "float32x4",
-                offset: 16,
-                shaderLocation: 1,
-              },
-              {
-                format: "float32x4",
-                offset: 32,
-                shaderLocation: 2,
-              },
-              {
-                format: "float32x4",
-                offset: 48,
-                shaderLocation: 3,
-              },
-              // Color code
-              {
-                format: "float32",
-                offset: 64,
-                shaderLocation: 4,
-              },
-            ],
-          },
-          // Shared stud geometry
-          {
-            arrayStride: 4 * 4,
-            stepMode: "vertex",
-            attributes: [
-              {
-                format: "float32x3",
-                offset: 0,
-                shaderLocation: 5,
-              },
-
-              // Color code (unused)
-              {
-                format: "float32",
-                offset: 12,
-                shaderLocation: 6,
-              },
-            ],
-          },
+          studInstanceBuffers,
+          ...offsetBuffersForStuds(trianglePipelineDescriptor.vertex),
         ],
       },
+    };
+
+    this.#studOpaqueTrianglePipeline = device.createRenderPipeline({
+      ...studTrianglePipelineDescriptor,
+      label: "Stud opaque triangle pipeline",
       fragment: {
-        module: studTriangleShaderModule,
-        entryPoint: "fragmentMain",
-        targets: [transparencyTarget],
+        ...studTrianglePipelineDescriptor.fragment,
+        constants: {
+          transparent: 0,
+        },
+      },
+    });
+
+    this.#studTransparentTrianglePipeline = device.createRenderPipeline({
+      ...studTrianglePipelineDescriptor,
+      label: "Stud transparent triangle pipeline",
+      depthStencil: {
+        ...studTrianglePipelineDescriptor.depthStencil,
+
+        // Stud triangles shouldn't block other triangles
+        depthWriteEnabled: false,
+      },
+      fragment: {
+        ...studTrianglePipelineDescriptor.fragment,
+        constants: {
+          transparent: 1,
+        },
       },
     });
 
@@ -512,148 +526,21 @@ export class GpuRenderer {
     });
 
     this.#studLinePipeline = device.createRenderPipeline({
+      ...linePipelineDescriptor,
       label: "Stud line pipeline",
-      depthStencil: DEPTH_STENCIL,
-      layout: pipelineLayout,
-      primitive: { topology: "line-list" },
       vertex: {
         module: studLineShaderModule,
         entryPoint: "vertexMain",
         buffers: [
-          {
-            arrayStride: 17 * 4,
-            stepMode: "instance",
-            attributes: [
-              // 4 matrix columns
-              {
-                format: "float32x4",
-                offset: 0,
-                shaderLocation: 0,
-              },
-              {
-                format: "float32x4",
-                offset: 16,
-                shaderLocation: 1,
-              },
-              {
-                format: "float32x4",
-                offset: 32,
-                shaderLocation: 2,
-              },
-              {
-                format: "float32x4",
-                offset: 48,
-                shaderLocation: 3,
-              },
-              // Color code (unused for lines)
-              {
-                format: "float32",
-                offset: 64,
-                shaderLocation: 4,
-              },
-            ],
-          },
-          // Shared stud line geometry
-          {
-            arrayStride: 3 * 4,
-            stepMode: "vertex",
-            attributes: [
-              {
-                format: "float32x3",
-                offset: 0,
-                shaderLocation: 5,
-              },
-            ],
-          },
+          studInstanceBuffers,
+          ...offsetBuffersForStuds(linePipelineDescriptor.vertex),
         ],
-      },
-      fragment: {
-        module: studLineShaderModule,
-        entryPoint: "fragmentMain",
-        targets: [{ format }],
       },
     });
 
-    const studOptionalLineShaderModule = device.createShaderModule({
-      label: "Stud optional line shader",
-      code: STUD_OPTIONAL_LINE_SHADER,
-    });
-
-    this.#studOptionalLinePipeline = device.createRenderPipeline({
-      label: "Stud optional line pipeline",
-      layout: pipelineLayout,
-      primitive: { topology: "line-list" },
-      depthStencil: DEPTH_STENCIL,
-      vertex: {
-        module: studOptionalLineShaderModule,
-        entryPoint: "vertexMain",
-        buffers: [
-          {
-            arrayStride: 17 * 4,
-            stepMode: "instance",
-            attributes: [
-              // 4 matrix columns
-              {
-                format: "float32x4",
-                offset: 0,
-                shaderLocation: 0,
-              },
-              {
-                format: "float32x4",
-                offset: 16,
-                shaderLocation: 1,
-              },
-              {
-                format: "float32x4",
-                offset: 32,
-                shaderLocation: 2,
-              },
-              {
-                format: "float32x4",
-                offset: 48,
-                shaderLocation: 3,
-              },
-              // Color code (unused for lines)
-              {
-                format: "float32",
-                offset: 64,
-                shaderLocation: 4,
-              },
-            ],
-          },
-          {
-            // (p1, p2, c1, c2) = 12 floats
-            arrayStride: 12 * 4,
-            attributes: [
-              {
-                format: "float32x3",
-                offset: 0,
-                shaderLocation: 5, // point 1
-              },
-              {
-                format: "float32x3",
-                offset: 12,
-                shaderLocation: 6, // point 2
-              },
-              {
-                format: "float32x3",
-                offset: 24,
-                shaderLocation: 7, // control point 1
-              },
-              {
-                format: "float32x3",
-                offset: 36,
-                shaderLocation: 8, // control point 2
-              },
-            ],
-          },
-        ],
-      },
-      fragment: {
-        module: studOptionalLineShaderModule,
-        entryPoint: "fragmentMain",
-        targets: [{ format }],
-      },
+    const optionalLineFragmentShaderModule = device.createShaderModule({
+      label: "Optional line fragment shader",
+      code: OPTIONAL_LINE_FRAGMENT_SHADER,
     });
 
     const optionalLineShaderModule = device.createShaderModule({
@@ -661,7 +548,13 @@ export class GpuRenderer {
       code: OPTIONAL_LINE_SHADER,
     });
 
-    this.#optionalLinePipeline = device.createRenderPipeline({
+    const studOptionalLineShaderModule = device.createShaderModule({
+      label: "Stud optional line shader",
+      code: STUD_OPTIONAL_LINE_SHADER,
+    });
+
+    /** @satisfies {GPURenderPipelineDescriptor} */
+    const optionalLinePipelineDescriptor = {
       label: "Optional line pipeline",
       layout: pipelineLayout,
       primitive: { topology: "line-list" },
@@ -699,9 +592,26 @@ export class GpuRenderer {
         ],
       },
       fragment: {
-        module: optionalLineShaderModule,
+        module: optionalLineFragmentShaderModule,
         entryPoint: "fragmentMain",
         targets: [{ format }],
+      },
+    };
+
+    this.#optionalLinePipeline = device.createRenderPipeline(
+      optionalLinePipelineDescriptor
+    );
+
+    this.#studOptionalLinePipeline = device.createRenderPipeline({
+      ...optionalLinePipelineDescriptor,
+      label: "Stud optional line pipeline",
+      vertex: {
+        module: studOptionalLineShaderModule,
+        entryPoint: "vertexMain",
+        buffers: [
+          studInstanceBuffers,
+          ...offsetBuffersForStuds(optionalLinePipelineDescriptor.vertex),
+        ],
       },
     });
   }
@@ -758,11 +668,17 @@ export class GpuRenderer {
  * @typedef {Record<
  *   | "lines"
  *   | "optionalLines"
- *   | "opaqueTriangles"
- *   | "transparentTriangles"
+ *   | "triangles"
  *   | "studs",
  * GeometryRenderDescriptor>} PreparedGeometry
  */
+
+const EDGE_FRAGMENT_SHADER = `
+  @fragment
+  fn fragmentMain() -> @location(0) vec4f {
+    return vec4(0.0, 0.0, 0.0, 1.0);
+  }
+  `;
 
 const EDGE_SHADER = `
   struct VertexInput {
@@ -784,39 +700,23 @@ const EDGE_SHADER = `
     output.position = rotationMatrix * input.position;
     return output;
   }
-
-  @fragment
-  fn fragmentMain() -> @location(0) vec4f {
-    return vec4(0.0, 0.0, 0.0, 1.0);
-  }
   `;
 
-// dot((ci - p1) x (p2 - p1), view) > 0
-
-const OPTIONAL_LINE_SHADER = `
-  struct VertexInput {
-    @location(0) p1: vec4f,
-    @location(1) p2: vec4f,
-    @location(2) c1: vec4f,
-    @location(3) c2: vec4f,
-  }
-
+const OPTIONAL_LINE_FUNCTION = `
   struct VertexOutput {
     @builtin(position) position: vec4f,
     @location(0) @interpolate(flat) shouldDiscard: f32,
   }
 
-  @group(0) @binding(0) var<uniform> rotationMatrix: mat4x4f;
-
-  @vertex
-  fn vertexMain(
+  fn shouldShowLine(
+    projection: mat4x4f,
     input: VertexInput,
-    @builtin(vertex_index) vertexIndex: u32
+    vertexIndex: u32
   ) -> VertexOutput {
-    let p1 = rotationMatrix * input.p1;
-    let p2 = rotationMatrix * input.p2;
-    let c1 = rotationMatrix * input.c1;
-    let c2 = rotationMatrix * input.c2;
+    let p1 = projection * input.p1;
+    let p2 = projection * input.p2;
+    let c1 = projection * input.c1;
+    let c2 = projection * input.c2;
 
     let edge = (p2 - p1).xyz;
     let toC1 = (c1 - p1).xyz;
@@ -850,18 +750,40 @@ const OPTIONAL_LINE_SHADER = `
     output.shouldDiscard = select(1.0, 0.0, shouldShow);
     return output;
   }
-
-  @fragment
-  fn fragmentMain(input: VertexOutput) -> @location(0) vec4f {
-    // Discard fragments where the line shouldn't be drawn
-    if (input.shouldDiscard < 0.5) {
-      discard;
-    }
-    return vec4f(0.0, 0.0, 0.0, 1.0);
-  }
 `;
 
+const OPTIONAL_LINE_SHADER = `
+  struct VertexInput {
+    @location(0) p1: vec4f,
+    @location(1) p2: vec4f,
+    @location(2) c1: vec4f,
+    @location(3) c2: vec4f,
+  }
+
+  @group(0) @binding(0) var<uniform> rotationMatrix: mat4x4f;
+
+  @vertex
+  fn vertexMain(
+    input: VertexInput,
+    @builtin(vertex_index) vertexIndex: u32
+  ) -> VertexOutput {
+    return shouldShowLine(rotationMatrix, input, vertexIndex);
+  }
+
+  ${OPTIONAL_LINE_FUNCTION}`;
+
 const COLOR_FRAGMENT_SHADER = `
+  override transparent: bool = false;
+
+  @group(0) @binding(1) var<uniform> defaultColor: vec4f;
+
+  @group(0) @binding(2) var colorTexture: texture_2d<f32>;
+
+  struct VertexOutput {
+    @builtin(position) position: vec4f,
+    @location(0) color: f32,
+  }
+
   @fragment
   fn fragmentMain(input: VertexOutput) -> @location(0) vec4f {
     let colorIndex = i32(input.color);
@@ -875,6 +797,15 @@ const COLOR_FRAGMENT_SHADER = `
       let x = colorIndex % 256;
       let y = colorIndex / 256;
       color = textureLoad(colorTexture, vec2i(x, y), 0);
+    }
+
+    let alpha = color.w;
+    if (transparent && alpha == 1) {
+      discard;
+    }
+
+    if (!transparent && alpha < 1) {
+      discard;
     }
 
     return color * color.w;
@@ -894,10 +825,6 @@ const TRIANGLE_SHADER = `
 
   @group(0) @binding(0) var<uniform> rotationMatrix: mat4x4f;
 
-  @group(0) @binding(1) var<uniform> defaultColor: vec4f;
-
-  @group(0) @binding(2) var colorTexture: texture_2d<f32>;
-
   @vertex
   fn vertexMain(input: VertexInput) -> VertexOutput {
     var output: VertexOutput;
@@ -906,8 +833,6 @@ const TRIANGLE_SHADER = `
     output.color = input.color;
     return output;
   }
-
-  ${COLOR_FRAGMENT_SHADER}
   `;
 
 const STUD_LINE_SHADER = `
@@ -943,11 +868,6 @@ const STUD_LINE_SHADER = `
     output.position = rotationMatrix * instanceMatrix * position;
     return output;
   }
-
-  @fragment
-  fn fragmentMain() -> @location(0) vec4f {
-    return vec4(0.0, 0.0, 0.0, 1.0);
-  }
   `;
 
 // dot((ci - p1) x (p2 - p1), view) > 0
@@ -968,11 +888,6 @@ const STUD_OPTIONAL_LINE_SHADER = `
     @location(8) c2: vec4f,
   }
 
-  struct VertexOutput {
-    @builtin(position) position: vec4f,
-    @location(0) @interpolate(flat) shouldDiscard: f32,
-  }
-
   @group(0) @binding(0) var<uniform> rotationMatrix: mat4x4f;
 
   @vertex
@@ -988,42 +903,16 @@ const STUD_OPTIONAL_LINE_SHADER = `
       instance.column4
     );
     let projection = rotationMatrix * instanceMatrix;
-    let p1 = projection * vertex.p1;
-    let p2 = projection * vertex.p2;
-    let c1 = projection * vertex.c1;
-    let c2 = projection * vertex.c2;
 
-    let edge = (p2 - p1).xyz;
-    let toC1 = (c1 - p1).xyz;
-    let toC2 = (c2 - p1).xyz;
+    return shouldShowLine(projection, vertex, vertexIndex);
+  }
 
-    // A vector pointing at the camera — hardcoded for now.
-    let viewNormal = vec3f(0.0, 0.0, 1.0);
+  ${OPTIONAL_LINE_FUNCTION}`;
 
-    // The cross product gives us a vector perpendicular
-    // to both the edge and the control points.
-    // The dot product then gets us the magnitude along
-    // the camera's vector.
-    let cross1 = dot(cross(edge, toC1), viewNormal);
-    let cross2 = dot(cross(edge, toC2), viewNormal);
-
-    // Only render an optional line if the control
-    // points are on either side. If one point is
-    // "behind" the edge from the camera's perspective
-    // and the other is in "front", then their magnitudes
-    // will have different signs and their product will
-    // be negative.
-    let shouldShow = cross1 * cross2 < 0.0;
-
-    // We need to render two points to make a line,
-    // so every pass we flip betwen the first point and the second.
-    let endpointIndex = vertexIndex & 1u;
-    let point = select(p1, p2, endpointIndex == 1u);
-
-    var output: VertexOutput;
-    output.position = point;
-    output.shouldDiscard = select(1.0, 0.0, shouldShow);
-    return output;
+const OPTIONAL_LINE_FRAGMENT_SHADER = `
+  struct VertexOutput {
+    @builtin(position) position: vec4f,
+    @location(0) @interpolate(flat) shouldDiscard: f32,
   }
 
   @fragment
@@ -1052,13 +941,10 @@ const STUD_TRIANGLE_SHADER = `
 
   @group(0) @binding(0) var<uniform> rotationMatrix: mat4x4f;
 
-  @group(0) @binding(1) var<uniform> defaultColor: vec4f;
-
-  @group(0) @binding(2) var colorTexture: texture_2d<f32>;
-
   @vertex
   fn vertexMain(
     @location(5) position: vec4f,
+    @location(6) color: f32,
     instance: InstanceInput
   ) -> VertexOutput {
     let instanceMatrix = mat4x4f(
@@ -1070,9 +956,7 @@ const STUD_TRIANGLE_SHADER = `
 
     var output: VertexOutput;
     output.position = rotationMatrix * instanceMatrix * position;
-    output.color = instance.color;
+    output.color = select(color, instance.color, color == 16.0);
     return output;
   }
-
-  ${COLOR_FRAGMENT_SHADER}
   `;
