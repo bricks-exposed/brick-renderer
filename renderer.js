@@ -141,18 +141,18 @@ export class GpuRenderer {
         }
       }
 
-      GpuRenderer.#renderGeometryDescriptor(
-        pass,
-        triangles,
-        this.#transparentTrianglePipeline
-      );
-
       if (studs.count && studGeometry.triangles.count) {
         pass.setPipeline(this.#studTransparentTrianglePipeline);
         pass.setVertexBuffer(0, studs.buffer);
         pass.setVertexBuffer(1, studGeometry.triangles.buffer);
         pass.draw(studGeometry.triangles.count, studs.count);
       }
+
+      GpuRenderer.#renderGeometryDescriptor(
+        pass,
+        triangles,
+        this.#transparentTrianglePipeline
+      );
 
       pass.end();
 
@@ -347,13 +347,13 @@ export class GpuRenderer {
       blend: {
         color: {
           operation: "add",
-          srcFactor: "one",
+          srcFactor: "src-alpha",
           dstFactor: "one-minus-src-alpha",
         },
         alpha: {
-          operation: "add",
+          operation: "max",
           srcFactor: "one",
-          dstFactor: "one-minus-src-alpha",
+          dstFactor: "one",
         },
       },
     };
@@ -808,7 +808,7 @@ const COLOR_FRAGMENT_SHADER = `
       discard;
     }
 
-    return color * color.w;
+    return color;
   }
 `;
 

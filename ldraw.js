@@ -748,8 +748,12 @@ export class Color {
       const r = Number.parseInt(value.slice(1, 3), 16);
       const g = Number.parseInt(value.slice(3, 5), 16);
       const b = Number.parseInt(value.slice(5, 7), 16);
-      const a = value.length === 9 ? Number.parseInt(value.slice(7), 16) : 255;
-      this.rgba = [r, g, b, a];
+      const a =
+        value.length === 9
+          ? // I find the configured alpha values a little too transparent
+            Number.parseInt(value.slice(7), 16) + 50
+          : 255;
+      this.rgba = [r, g, b, Math.min(a, 255)];
     } else {
       this.rgba = value;
     }

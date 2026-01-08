@@ -211,12 +211,14 @@ describe("Part rendering", function () {
 });
 
 describe("Colors", function () {
-  it("should parse a transparent color and apply the alpha", function () {
+  it("should parse a transparent color and increase the opacity", function () {
     const parsed = Color.from(
       "0 !COLOUR Transparent_Pink  CODE  45   VALUE #FC97AC   EDGE #F9345B   ALPHA 128"
     );
 
-    assert.equal(parsed?.rgba[3], 128);
+    const expected = 128 + 50;
+
+    assert.equal(parsed?.rgba[3], expected);
   });
 
   it("should properly convert to rgb", function () {
