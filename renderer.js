@@ -369,7 +369,6 @@ export class GpuRenderer {
     /** @satisfies {GPURenderPipelineDescriptor} */
     const trianglePipelineDescriptor = {
       layout: pipelineLayout,
-      primitive: { cullMode: "back" },
       depthStencil: {
         ...DEPTH_STENCIL,
         // Push triangles backwards slightly
@@ -418,6 +417,7 @@ export class GpuRenderer {
 
     this.#transparentTrianglePipeline = device.createRenderPipeline({
       ...trianglePipelineDescriptor,
+      primitive: { cullMode: "back" },
       label: "Transparent triangle pipeline",
       depthStencil: {
         ...trianglePipelineDescriptor.depthStencil,
