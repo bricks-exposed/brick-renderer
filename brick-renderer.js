@@ -5,68 +5,80 @@ import { Model } from "./model.js";
 const styleSheet = new CSSStyleSheet();
 styleSheet.replaceSync(`
   :host {
-    position: relative;
-    display: inline-block;
+    display: inline-grid;
 
-    --canvas-radius: 30px;
-    --canvas-padding: 0.125lh;
+    grid-template-areas: "canvas";
+    align-items: start;
+
+    --grid: 64px;
+
+    --canvas-radius: calc(var(--grid) / 2);
+    --canvas-padding: calc(var(--grid) / 5);
     --button-radius: calc(var(--canvas-radius) - var(--canvas-padding));
-
-    line-height: calc(var(--canvas-size) / 8);
+    --stud-size: calc(var(--grid) - 2 * var(--canvas-padding));
   }
 
   canvas {
+    grid-area: canvas;
+
     inline-size: var(--canvas-size);
     aspect-ratio: 1;
     border-radius: 30px;
     background-color: hsl(227, 70%, 59%);
-    background-size: 12.5% 12.5%;
+    background-size: var(--grid) var(--grid);
     background-image:
       linear-gradient(to right, #fff2 1px, transparent 1px),
       linear-gradient(to bottom, #fff2 1px, transparent 1px);
   }
 
   form {
-    position: absolute;
-    inset-block-end: 0;
-    inset-inline-start: 0;
-    inset-inline-end: 0;
-    padding: var(--canvas-padding);
+    grid-area: canvas;
 
     display: flex;
     align-items: start;
-    justify-content: space-between;
   }
 
   button[type="reset"] {
     font: inherit;
-    background: #fff5;
     user-select: none;
     appearance: none;
+    background: transparent;
     border: none;
-    padding: 0.125lh;
     color: white;
-    border-radius: 200px;
-    backdrop-filter: blur(5px);
+
+    cursor: pointer;
+
+    border-radius: var(--canvas-radius);
 
     display: flex;
-    align-items: start;
+    align-items: center;
     justify-content: center;
 
-    block-size: 0.75lh;
-    inline-size: 1.75lh;
+    inline-size: var(--grid);
+    block-size: var(--grid);
 
     svg {
-      block-size: 100%;
+      background: #fff5;
+      border-radius: 200px;
+      backdrop-filter: blur(5px);
       aspect-ratio: 1;
+      padding: 0.5em;
+      box-sizing: border-box;
+      inline-size: var(--stud-size);
     }
+  }
+
+  label:has(input[type="range"]) {
+    display: block;
+    padding: var(--canvas-padding);
+    box-sizing: border-box;
+    inline-size: calc(3 * var(--grid));
   }
 
   input[type="range"] {
     appearance: none;
-
+    paddin: 0;
     margin: 0;
-
     font: inherit;
 
     cursor: pointer;
@@ -75,17 +87,15 @@ styleSheet.replaceSync(`
     backdrop-filter: blur(5px);
 
     box-sizing: border-box;
-    inline-size: 5.75lh;
-    block-size: 0.75lh;
-
-    padding: 0.125lh;
+    inline-size: 100%;
+    block-size: var(--stud-size);
 
     &::-webkit-slider-thumb {
       appearance: none;
       padding: 0;
       margin: 0;
-      border-radius: calc(var(--button-radius) - 5px);
-      block-size: 0.5lh;
+      border-radius: var(--button-radius);
+      block-size: var(--stud-size);
       aspect-ratio: 1;
       background: #ffffff;
     }
@@ -96,9 +106,9 @@ styleSheet.replaceSync(`
       border: none;
       padding: 0;
       margin: 0;
-      border-radius: calc(var(--button-radius) - 5px);
-      block-size: 0.5lh;
-      inline-size: 0.5lh;
+      border-radius: var(--button-radius);
+      block-size: var(--stud-size);
+      aspect-ratio: 1;
       background: #ffffff;
     }
   }
@@ -284,7 +294,7 @@ export class BrickRenderer extends HTMLElement {
 
     reset.appendChild(icon);
 
-    form.append(scale, reset);
+    form.append(reset, scale);
     form.addEventListener("reset", () => this.reset());
 
     return form;
