@@ -8,8 +8,6 @@ styleSheet.replaceSync(`
     position: relative;
     display: inline-block;
 
-    --canvas-size: 512px;
-
     --canvas-radius: 30px;
     --canvas-padding: 0.125lh;
     --button-radius: calc(var(--canvas-radius) - var(--canvas-padding));
@@ -111,9 +109,12 @@ export class BrickRenderer extends HTMLElement {
 
   static #COLOR_ATTRIBUTE = "color";
 
+  static #SIZE_ATTRIBUTE = "size";
+
   static observedAttributes = [
     BrickRenderer.#FILE_ATTRIBUTE,
     BrickRenderer.#COLOR_ATTRIBUTE,
+    BrickRenderer.#SIZE_ATTRIBUTE,
   ];
 
   static #INITIAL_COLOR = "#e04d4d";
@@ -131,14 +132,14 @@ export class BrickRenderer extends HTMLElement {
       this.getAttribute(BrickRenderer.#COLOR_ATTRIBUTE) ??
       BrickRenderer.#INITIAL_COLOR;
 
-    const shadow = this.attachShadow({ mode: "open" });
-    shadow.adoptedStyleSheets = [styleSheet];
+    this.shadow = this.attachShadow({ mode: "open" });
+    this.shadow.adoptedStyleSheets = [styleSheet];
 
-    this.size = 512;
+    this.size = Number(this.getAttribute("size") ?? 512);
 
     this.canvas = document.createElement("canvas");
-    this.canvas.width = this.size * window.devicePixelRatio;
-    this.canvas.height = this.size * window.devicePixelRatio;
+
+    this.#updateCanvasSize();
 
     this.stopOrbiting = () => {
       window.removeEventListener("pointermove", this.orbit);
@@ -162,7 +163,7 @@ export class BrickRenderer extends HTMLElement {
 
     this.form = this.#createForm();
 
-    shadow.append(this.canvas, this.form);
+    this.shadow.append(this.canvas, this.form);
 
     this.file = this.getAttribute(BrickRenderer.#FILE_ATTRIBUTE);
   }
@@ -202,9 +203,32 @@ export class BrickRenderer extends HTMLElement {
         this.color = newValue;
         break;
       }
+      case BrickRenderer.#SIZE_ATTRIBUTE: {
+        this.resize(Number(newValue));
+        break;
+      }
     }
 
     this.update();
+  }
+
+  /**
+   * @param {number} size
+   */
+  resize(size) {
+    this.size = size;
+    this.#updateCanvasSize();
+    this.renderer.resize();
+    this.update();
+  }
+
+  #updateCanvasSize() {
+    if (this.shadow.host instanceof HTMLElement) {
+      this.shadow.host.style.setProperty("--canvas-size", `${this.size}px`);
+    }
+
+    this.canvas.width = this.size * window.devicePixelRatio;
+    this.canvas.height = this.size * window.devicePixelRatio;
   }
 
   /** @type {(event: PointerEvent) => void} */
@@ -213,9 +237,11 @@ export class BrickRenderer extends HTMLElement {
       return;
     }
 
+    const scaling = 512 / this.size;
+
     this.model?.transformation.rotateBy({
-      z: event.movementX,
-      x: -event.movementY,
+      z: event.movementX * scaling,
+      x: -event.movementY * scaling,
     });
 
     this.update();

@@ -72,7 +72,7 @@ export class GpuRenderer {
      * @param {PartGeometry} geometry
      * @param {PartGeometry} stud
      */
-    return (color, transformMatrix, geometry, stud) => {
+    const render = (color, transformMatrix, geometry, stud) => {
       const { lines, optionalLines, triangles, studs } =
         this.#prepareGeometry(geometry);
 
@@ -158,6 +158,14 @@ export class GpuRenderer {
 
       device.queue.submit([encoder.finish()]);
     };
+
+    function cleanup() {
+      colorBuffer.destroy();
+      uniformBuffer.destroy();
+      depthTexture.destroy();
+    }
+
+    return { render, cleanup };
   }
 
   /**
