@@ -1,6 +1,137 @@
 /** @import { Matrix } from "./matrix.js" */
 import * as matrix from "./matrix.js";
 
+export class MultiPartDocument {
+  /**
+   * @param {string} mainFileName
+   * @param {string | {files: Map<string, ParsedFile>; subFilesToLoad: Set<string> }} contents
+   * @param {File[]} loadedFiles
+   *
+   * @returns {File}
+   */
+  static from(mainFileName, contents, loadedFiles = []) {
+    const { files } =
+      typeof contents === "string"
+        ? MultiPartDocument.parse(mainFileName, contents)
+        : contents;
+
+    const mainFile = files.get(mainFileName);
+
+    if (!mainFile) {
+      throw new Error(`File ${mainFileName} is not present in contents`);
+    }
+
+    const allFiles = new Set(files.values().map((f) => f.fileName));
+
+    /** @type {Map<string, string[]>} */
+    const allReferences = new Map();
+
+    for (const parsed of files.values()) {
+      const interFileReferences = parsed.subFileReferences.filter((f) =>
+        allFiles.has(f.fileName)
+      );
+
+      allReferences.set(
+        parsed.fileName,
+        interFileReferences.map((f) => f.fileName)
+      );
+    }
+
+    const startNodes = [mainFileName];
+    const out = [];
+    let node;
+
+    while ((node = startNodes.shift())) {
+      out.push(node);
+
+      const references = allReferences.get(node) ?? [];
+
+      allReferences.delete(node);
+
+      const remainingReferences = new Set([...allReferences.values()].flat());
+
+      for (const reference of references) {
+        if (!remainingReferences.has(reference)) {
+          startNodes.push(reference);
+        }
+      }
+    }
+
+    const subFiles = loadedFiles;
+
+    for (const fileName of out.slice(1).reverse()) {
+      const parsedFile = files.get(fileName);
+
+      if (!parsedFile) {
+        throw new Error("This should never happen");
+      }
+
+      subFiles.push(File.from(fileName, parsedFile, subFiles));
+    }
+
+    return File.from(mainFileName, mainFile, subFiles);
+  }
+
+  /**
+   * @param {string} fileName
+   * @param {string} contents
+   *
+   * @returns {{
+   *   files: Map<string, ParsedFile>;
+   *   subFilesToLoad: Set<string>;
+   * }}
+   */
+  static parse(fileName, contents) {
+    const FILE_COMMAND = /^\s*0\s+FILE\s+/m;
+
+    let [initial, mainFileContents, ...blocks] = contents.split(FILE_COMMAND);
+
+    // Single file, not mpd
+    if (!mainFileContents) {
+      mainFileContents = initial;
+    }
+
+    /** @type {Map<string, ParsedFile>} */
+    const files = new Map();
+
+    const mainFile = File.parse(fileName, mainFileContents);
+
+    files.set(fileName, mainFile);
+
+    /** @type {Set<string>} */
+    const definedSubFiles = new Set();
+
+    /** @type {Set<string>} */
+    const subFileReferences = new Set();
+
+    for (const block of blocks) {
+      const firstNewline = block.indexOf("\n");
+      const [rawFileName, contents] = [
+        block.slice(0, firstNewline),
+        block.slice(firstNewline + 1),
+      ];
+
+      const blockFileName = rawFileName.trim();
+      const parsed = File.parse(blockFileName, contents);
+      definedSubFiles.add(blockFileName);
+      parsed.subFileReferences.forEach((f) =>
+        subFileReferences.add(f.fileName)
+      );
+      files.set(blockFileName, parsed);
+    }
+
+    const allSubFiles = new Set(
+      [...files.values()].flatMap((f) =>
+        f.subFileReferences.map((f) => f.fileName)
+      )
+    );
+
+    const subFilesToLoad = allSubFiles.difference(definedSubFiles);
+
+    return { files, subFilesToLoad };
+  }
+}
+
 export class File {
   /** @type {readonly { code: number; rgba: Rgba }[]} */
   static globalColors = [];
@@ -23,20 +154,20 @@ export class File {
    */
   static from(name, contents, subFiles = []) {
     const parsedFile =
-      typeof contents === "string" ? File.parse(contents) : contents;
+      typeof contents === "string" ? File.parse(name, contents) : contents;
 
     const subFileMap = new Map(subFiles.map((f) => [f.name, f]));
 
     const drawSubGeometryCommands = [];
 
-    for (const descriptor of parsedFile.subFiles) {
-      const subFile = subFileMap.get(descriptor.fileName);
+    for (const reference of parsedFile.subFileReferences) {
+      const subFile = subFileMap.get(reference.fileName);
 
       if (!subFile) {
-        throw new Error(`Missing required subFile ${descriptor.fileName}`);
+        throw new Error(`Missing required subFile ${reference.fileName}`);
       }
 
-      drawSubGeometryCommands.push(new DrawFile(subFile, descriptor));
+      drawSubGeometryCommands.push(new DrawFile(subFile, reference));
     }
 
     return new File(name, parsedFile.colors, [
@@ -46,13 +177,14 @@ export class File {
   }
 
   /**
+   * @param {string} fileName
    * @param {string} contents
    *
    * @returns {ParsedFile}
    */
-  static parse(contents) {
+  static parse(fileName, contents) {
     const commands = [];
-    const subFiles = [];
+    const subFileReferences = [];
 
     let colors = Colors.from(File.globalColors);
 
@@ -81,11 +213,18 @@ export class File {
         if (parsed instanceof DrawCommand) {
           commands.push(parsed);
         } else {
-          subFiles.push(parsed);
+          subFileReferences.push(parsed);
         }
       }
     }
-    return { colors, commands, subFiles };
+
+    return {
+      fileName,
+      colors,
+      commands,
+      subFileReferences,
+      subFilesToLoad: new Set(subFileReferences.map((f) => f.fileName)),
+    };
   }
 
   /**
@@ -289,7 +428,7 @@ class DrawCommand {
 /** @abstract */
 class DrawSubGeometry extends DrawCommand {
   /**
-   * @param {SubFileDescriptor} descriptor
+   * @param {SubFileReference} refererence
    */
   constructor({ color, transformation, invertSelf, parentInvert }) {
     super(color, parentInvert);
@@ -335,7 +474,7 @@ class DrawSubGeometry extends DrawCommand {
    * @param {boolean} parentInvert
    * @param {Colors} colors
    *
-   * @returns {SubFileDescriptor | DrawStud | undefined}
+   * @returns {SubFileReference | DrawStud | undefined}
    */
   static from(command, parentInvert, colors) {
     const [type, unparsedColor, ...tokens] = command.split(/\s+/);
@@ -346,13 +485,8 @@ class DrawSubGeometry extends DrawCommand {
 
     const color = Number(unparsedColor);
 
-    const [fileStart, ...fileRest] = tokens.splice(12);
-
-    const fileEnd = fileRest.at(fileRest.length - 1);
-
-    const fileName = fileEnd
-      ? new RegExp(`/.*\s(${fileStart}.*${fileEnd})$`).exec(command)?.[1]
-      : fileStart;
+    const fileName = command.match(/^(\S+\s+){14}(?<fileName>.*)/)?.groups
+      ?.fileName;
 
     if (!fileName) {
       throw new Error(
@@ -372,7 +506,7 @@ class DrawSubGeometry extends DrawCommand {
      */
     const transformation = [a, g, d, 0, c, i, f, 0, b, h, e, 0, x, z, y, 1];
 
-    const descriptor = {
+    const reference = {
       fileName,
       color: colors.for(color),
       transformation,
@@ -380,7 +514,7 @@ class DrawSubGeometry extends DrawCommand {
       parentInvert,
     };
 
-    return fileName === "stud.dat" ? new DrawStud(descriptor) : descriptor;
+    return fileName === "stud.dat" ? new DrawStud(reference) : reference;
   }
 
   /**
@@ -394,10 +528,10 @@ class DrawSubGeometry extends DrawCommand {
 class DrawFile extends DrawSubGeometry {
   /**
    * @param {File} file
-   * @param {SubFileDescriptor} descriptor
+   * @param {SubFileReference} reference
    */
-  constructor(file, descriptor) {
-    super(descriptor);
+  constructor(file, reference) {
+    super(reference);
     this.file = file;
   }
 
@@ -416,10 +550,10 @@ class DrawFile extends DrawSubGeometry {
 
 class DrawStud extends DrawSubGeometry {
   /**
-   * @param {SubFileDescriptor} descriptor
+   * @param {SubFileReference} reference
    */
-  constructor(descriptor) {
-    super(descriptor);
+  constructor(reference) {
+    super(reference);
   }
 
   /**
@@ -821,14 +955,16 @@ export class Color {
  *   transformation: Matrix;
  *   invertSelf: boolean;
  *   parentInvert: boolean;
- * }} SubFileDescriptor
+ * }} SubFileReference
  */
 
 /**
  * @typedef {{
+ *   fileName: string;
  *   colors: Colors;
  *   commands: readonly DrawCommand[];
- *   subFiles: readonly SubFileDescriptor[];
+ *   subFileReferences: readonly SubFileReference[];
+ *   subFilesToLoad: Set<string>;
  * }} ParsedFile
  */
 

@@ -1,4 +1,4 @@
-import { File } from "./ldraw.js";
+import { File, MultiPartDocument } from "./ldraw.js";
 
 /**
  * @typedef {{
@@ -80,15 +80,50 @@ export class FileLoader {
       throw new Error(`Could not find file ${fileName}`);
     }
 
-    const parsed = File.parse(contents);
+    return fileName.includes(".mpd")
+      ? this.#loadMpdFile(fileName, contents)
+      : this.#loadNormalFile(fileName, contents);
+  }
 
+  /**
+   * @param {string} fileName
+   * @param {string} contents
+   *
+   * @returns {Promise<File>}
+   */
+  async #loadNormalFile(fileName, contents) {
+    const parsed = File.parse(fileName, contents);
+
+    const subFiles = await this.#fetchAndLoadSubfiles(parsed.subFilesToLoad);
+
+    return File.from(fileName, parsed, subFiles);
+  }
+
+  /**
+   * @param {string} fileName
+   * @param {string} contents
+   *
+   * @returns {Promise<File>}
+   */
+  async #loadMpdFile(fileName, contents) {
+    const parsed = MultiPartDocument.parse(fileName, contents);
+
+    const subFiles = await this.#fetchAndLoadSubfiles(parsed.subFilesToLoad);
+
+    return MultiPartDocument.from(fileName, parsed, subFiles);
+  }
+
+  /**
+   * @param {Iterable<string>} names
+   */
+  async #fetchAndLoadSubfiles(names) {
     const promises = [];
-    for (const subFile of parsed.subFiles) {
-      let request = this.#fileRequestCache.get(subFile.fileName);
+    for (const subFile of names) {
+      let request = this.#fileRequestCache.get(subFile);
 
       if (!request) {
-        request = this.load(subFile.fileName);
-        this.#fileRequestCache.set(subFile.fileName, request);
+        request = this.load(subFile);
+        this.#fileRequestCache.set(subFile, request);
       }
 
       promises.push(request);
@@ -96,8 +131,7 @@ export class FileLoader {
 
     const subFiles = await Promise.all(promises);
 
-    const file = File.from(fileName, parsed, subFiles);
-    return file;
+    return subFiles;
   }
 
   /**
@@ -156,10 +190,10 @@ export class FileLoader {
       return ["ldraw/parts"];
     } else if (fileName.startsWith("8\\") || fileName.startsWith("48\\")) {
       return ["ldraw/p"];
+    } else if (/[.]ldr$/.test(fileName) || /[.]mpd$/.test(fileName)) {
+      return ["ldraw/models"];
     } else if (/^\d\d\d/.test(fileName)) {
       return ["ldraw/parts"];
-    } else if (/[.]ldr$/.test(fileName)) {
-      return ["ldraw/models"];
     } else {
       return ["ldraw/p", "ldraw/parts", "ldraw/models"];
     }

@@ -1,9 +1,159 @@
 import { describe, it } from "node:test";
 import assert from "node:assert/strict";
-import { File, Color, Colors } from "./ldraw.js";
+import { File, Color, Colors, MultiPartDocument } from "./ldraw.js";
 import { fromScaling } from "./matrix.js";
 
 const Test_Colors = new Colors([Color.custom("#000000")]);
+
+describe("multi-part documents", function () {
+  it("should pull single file contents", function () {
+    const testFile = `
+      0 FILE 1234 - TestFile.ldr
+
+      2 24 1 0 0 1 1 0
+    `;
+
+    const file = MultiPartDocument.from("TestFile.ldr", testFile);
+
+    const { lines } = file.render();
+
+    assert.deepEqual(lines, [
+      {
+        points: [
+          [1, 0, 0],
+          [1, 0, 1],
+        ],
+        controlPoints: undefined,
+      },
+    ]);
+  });
+
+  it("should define and render one sub file", function () {
+    const testFile = `
+      0 FILE 1234 - MainFile.ldr
+
+      2 24 1 0 0 1 1 0
+      1 16 0 0 0 1 0 0 0 1 0 0 0 1 5678 - SubFile.ldr
+
+      0 FILE 5678 - SubFile.ldr
+
+      2 24 0 0 0 0 1 0
+    `;
+
+    const file = MultiPartDocument.from("TestFile.ldr", testFile);
+
+    const { lines } = file.render();
+
+    assert.deepEqual(lines, [
+      {
+        points: [
+          [1, 0, 0],
+          [1, 0, 1],
+        ],
+        controlPoints: undefined,
+      },
+      {
+        points: [
+          [0, 0, 0],
+          [0, 0, 1],
+        ],
+        controlPoints: undefined,
+      },
+    ]);
+  });
+
+  it("should define and render multiple sub files", function () {
+    const testFile = `
+      0 FILE 1234 - MainFile.ldr
+
+      2 24 1 0 0 1 1 0
+      1 16 0 0 0 1 0 0 0 1 0 0 0 1 5678 - SubFile1.ldr
+      1 16 0 0 0 1 0 0 0 1 0 0 0 1 SubFile2.ldr
+
+      0 FILE 5678 - SubFile1.ldr
+
+      2 24 0 0 0 0 1 0
+
+      0 FILE SubFile2.ldr
+
+      2 24 0 0 1 0 0 1
+    `;
+
+    const file = MultiPartDocument.from("TestFile.ldr", testFile);
+
+    const { lines } = file.render();
+
+    assert.deepEqual(lines, [
+      {
+        points: [
+          [1, 0, 0],
+          [1, 0, 1],
+        ],
+        controlPoints: undefined,
+      },
+      {
+        points: [
+          [0, 0, 0],
+          [0, 0, 1],
+        ],
+        controlPoints: undefined,
+      },
+      {
+        points: [
+          [0, 1, 0],
+          [0, 1, 0],
+        ],
+        controlPoints: undefined,
+      },
+    ]);
+  });
+
+  it("should define and render nested sub files", function () {
+    const testFile = `
+      0 FILE 1234 - MainFile.ldr
+
+      2 24 1 0 0 1 1 0
+      1 16 0 0 0 1 0 0 0 1 0 0 0 1 5678 - SubFile1.ldr
+
+      0 FILE 5678 - SubFile1.ldr
+
+      2 24 0 0 0 0 1 0
+      1 16 0 0 0 1 0 0 0 1 0 0 0 1 SubFile2.ldr
+
+      0 FILE SubFile2.ldr
+
+      2 24 0 0 1 0 0 1
+    `;
+
+    const file = MultiPartDocument.from("TestFile.ldr", testFile);
+
+    const { lines } = file.render();
+
+    assert.deepEqual(lines, [
+      {
+        points: [
+          [1, 0, 0],
+          [1, 0, 1],
+        ],
+        controlPoints: undefined,
+      },
+      {
+        points: [
+          [0, 0, 0],
+          [0, 0, 1],
+        ],
+        controlPoints: undefined,
+      },
+      {
+        points: [
+          [0, 1, 0],
+          [0, 1, 0],
+        ],
+        controlPoints: undefined,
+      },
+    ]);
+  });
+});
 
 describe("Part rendering", function () {
   it("should render basic lines", function () {
