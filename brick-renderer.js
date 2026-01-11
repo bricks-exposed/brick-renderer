@@ -107,8 +107,8 @@ styleSheet.replaceSync(`
       padding: 0;
       margin: 0;
       border-radius: var(--button-radius);
+      inline-size: var(--stud-size);
       block-size: var(--stud-size);
-      aspect-ratio: 1;
       background: #ffffff;
     }
   }
