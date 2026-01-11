@@ -135,7 +135,7 @@ export class MultiPartDocument {
 export class File {
   /**
    * @param {string} name
-   * @param {Colors} colors
+   * @param {Color[]} colors
    * @param {readonly DrawCommand[]} commands
    */
   constructor(name, colors, commands) {
@@ -217,7 +217,7 @@ export class File {
 
     return {
       fileName,
-      colors: Colors.from(colors),
+      colors,
       commands,
       subFileReferences,
       subFilesToLoad: new Set(subFileReferences.map((f) => f.fileName)),
@@ -360,7 +360,10 @@ class DrawCommand {
    * @param {boolean} invert
    */
   constructor(color, invert) {
-    this.color = color === Color.CURRENT_COLOR_CODE ? null : color;
+    this.color =
+      color === Color.CURRENT_COLOR_CODE || color === Color.EDGE_COLOR_CODE
+        ? null
+        : color;
     this.invertedByParent = invert;
   }
 
@@ -662,68 +665,6 @@ const CommandMap = {
   [LineType.DrawQuadrilateral]: DrawQuadrilateral,
 };
 
-export class Colors {
-  #colors;
-
-  /**
-   * @param {readonly Color[]} colors
-   */
-  constructor(colors) {
-    this.all = colors;
-    this.#colors = new Map(colors.map((c) => [c.code, c]));
-  }
-
-  /**
-   *
-   * @param {readonly {
-   *   code: number;
-   *   rgba: Rgba;
-   * }[]} colors
-   */
-  static from(colors) {
-    return new Colors(
-      colors.map(({ code, rgba }) => new Color(code.toString(), code, rgba))
-    );
-  }
-
-  /**
-   * @param {Colors} colors
-   */
-  combine(colors) {
-    return new Colors([...this.all, ...colors.all]);
-  }
-
-  /**
-   * @param {Color} color
-   */
-  newWith(color) {
-    return new Colors([...this.all, color]);
-  }
-
-  /**
-   * @param {number | string} code
-   */
-  for(code) {
-    code = Number(code);
-
-    if (code === Color.CURRENT_COLOR_CODE) {
-      return Color.CURRENT_COLOR;
-    }
-
-    if (code === Color.EDGE_COLOR_CODE) {
-      return Color.EDGE_COLOR;
-    }
-
-    const color = this.#colors.get(code);
-
-    if (!color) {
-      throw new Error(`No color defined for code ${code}`);
-    }
-
-    return color;
-  }
-}
-
 export class Color {
   static CURRENT_COLOR_CODE = 16;
 
@@ -746,29 +687,45 @@ export class Color {
   /** @readonly @type {Rgba} */
   rgba;
 
+  /** @readonly @type {Rgba} */
+  edge;
+
   /**
    * @param {string} name
    * @param {number} code
    * @param {string | Rgba} value
+   * @param {string | Rgba} [edge]
    */
-  constructor(name, code, value) {
+  constructor(name, code, value, edge) {
     this.name = name;
     this.code = code;
 
-    if (typeof value === "string") {
-      const r = Number.parseInt(value.slice(1, 3), 16);
-      const g = Number.parseInt(value.slice(3, 5), 16);
-      const b = Number.parseInt(value.slice(5, 7), 16);
-      const a =
-        value.length === 9
-          ? // I find the configured alpha values a little too transparent
-            Number.parseInt(value.slice(7), 16) + 50
-          : 255;
-      this.rgba = [r, g, b, Math.min(a, 255)];
-    } else {
-      this.rgba = value;
-    }
+    this.rgba = Color.#toRgba(value);
+    this.edge = Color.#toRgba(edge ?? [0, 0, 0, 0]);
+
     this.opaque = this.rgba[3] === 255;
+  }
+
+  /**
+   * @param {string | Rgba} value
+   *
+   * @returns {Rgba}
+   */
+  static #toRgba(value) {
+    if (typeof value !== "string") {
+      return value;
+    }
+
+    const r = Number.parseInt(value.slice(1, 3), 16);
+    const g = Number.parseInt(value.slice(3, 5), 16);
+    const b = Number.parseInt(value.slice(5, 7), 16);
+    const a =
+      value.length === 9
+        ? // I find the configured alpha values a little too transparent
+          Number.parseInt(value.slice(7), 16) + 50
+        : 255;
+
+    return [r, g, b, Math.min(a, 255)];
   }
 
   /**
@@ -820,7 +777,8 @@ export class Color {
     return new Color(
       name.replaceAll("_", " "),
       Number.parseInt(code, 10),
-      value
+      value,
+      edge
     );
   }
 }
@@ -838,7 +796,7 @@ export class Color {
 /**
  * @typedef {{
  *   fileName: string;
- *   colors: Colors;
+ *   colors: Color[];
  *   commands: readonly DrawCommand[];
  *   subFileReferences: readonly SubFileReference[];
  *   subFilesToLoad: Set<string>;

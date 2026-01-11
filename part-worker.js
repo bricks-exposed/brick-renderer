@@ -1,13 +1,12 @@
-/** @import { PartGeometry } from "./ldraw.js" */
+/** @import { Color, PartGeometry } from "./ldraw.js" */
 /** @import { TypedWorker, TypedInnerWorker } from "./async-worker.js" */
 import { PartDb } from "./part-db.js";
 import { FileLoader } from "./file-loader.js";
-import { Colors } from "./ldraw.js";
 
 /** @type {FileLoader} */
 let fileLoader;
 
-/** @type {Colors} */
+/** @type {Color[]} */
 let colors;
 
 /** @type {TypedInnerWorker<Events>} */
@@ -40,7 +39,7 @@ self.onmessage = async function ({ data: { type, data, id } }) {
         type: "initialize",
         id,
         success: true,
-        data: colors.all,
+        data: colors,
       });
 
       return;
@@ -119,7 +118,11 @@ function fetchPart(fileName, paths) {
  *   };
  *   "initialize": {
  *     request: undefined;
- *     response: readonly { code: number; rgba: [number, number, number, number] }[];
+ *     response: readonly {
+ *       code: number;
+ *       rgba: [number, number, number, number];
+ *       edge: [number, number, number, number];
+ *     }[];
  *   }
  * }} Events
  *

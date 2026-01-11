@@ -6,7 +6,9 @@ export class Loader {
   /**
    * @type {Promise<readonly {
    *   code: number;
-   *   rgba: [number, number, number, number] }[]
+   *   rgba: [number, number, number, number];
+   *   edge: [number, number, number, number];
+   * }[]
    * > | undefined}
    */
   #cachedInitializeRequest;

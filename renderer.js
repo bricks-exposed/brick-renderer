@@ -30,6 +30,8 @@ export class GpuRenderer {
 
   #colorTexture;
 
+  #edgeColorTexture;
+
   /**
    * @type {Map<string, PreparedGeometry>}
    */
@@ -238,7 +240,7 @@ export class GpuRenderer {
   /**
    * @param {GPUDevice} device
    * @param {GPUTextureFormat} format
-   * @param {readonly { code: number; rgba: number[] }[]} colors
+   * @param {readonly { code: number; rgba: number[]; edge: number[] }[]} colors
    */
   constructor(device, format, colors) {
     this.device = device;
@@ -252,8 +254,10 @@ export class GpuRenderer {
     const textureWidth = 256;
     const textureHeight = Math.ceil((highestCode + 1) / textureWidth);
     const textureData = new Uint8Array(textureWidth * textureHeight * 4);
+    const edgeTextureData = new Uint8Array(textureWidth * textureHeight * 4);
     for (const color of colors) {
       textureData.set(color.rgba, color.code * 4);
+      edgeTextureData.set(color.edge, color.code * 4);
     }
 
     this.#colorTexture = device.createTexture({
@@ -265,6 +269,19 @@ export class GpuRenderer {
     device.queue.writeTexture(
       { texture: this.#colorTexture },
       textureData,
+      { bytesPerRow: textureWidth * 4 },
+      { width: textureWidth, height: textureHeight }
+    );
+
+    this.#edgeColorTexture = device.createTexture({
+      label: "Edge color map texture",
+      format: "rgba8unorm",
+      size: { width: textureWidth, height: textureHeight },
+      usage: GPUTextureUsage.COPY_DST | GPUTextureUsage.TEXTURE_BINDING,
+    });
+    device.queue.writeTexture(
+      { texture: this.#edgeColorTexture },
+      edgeTextureData,
       { bytesPerRow: textureWidth * 4 },
       { width: textureWidth, height: textureHeight }
     );
@@ -287,6 +304,11 @@ export class GpuRenderer {
         },
         {
           binding: 2,
+          visibility: GPUShaderStage.FRAGMENT,
+          texture: { sampleType: "float" },
+        },
+        {
+          binding: 3,
           visibility: GPUShaderStage.FRAGMENT,
           texture: { sampleType: "float" },
         },
@@ -675,12 +697,16 @@ export class GpuRenderer {
           binding: 2,
           resource: this.#colorTexture.createView(),
         },
+        {
+          binding: 3,
+          resource: this.#edgeColorTexture.createView(),
+        },
       ],
     });
   }
 
   /**
-   * @param {readonly  { code: number; rgba: number[] }[]} colors
+   * @param {readonly { code: number; rgba: number[]; edge: number[] }[]} colors
    */
   static async create(colors) {
     const adapter = await navigator.gpu.requestAdapter();
@@ -712,19 +738,42 @@ export class GpuRenderer {
  */
 
 const EDGE_FRAGMENT_SHADER = `
+  struct VertexOutput {
+    @builtin(position) position: vec4f,
+    @location(0) color: f32,
+  }
+
+  @group(0) @binding(3) var edgeTexture: texture_2d<f32>;
+
   @fragment
-  fn fragmentMain() -> @location(0) vec4f {
-    return vec4(0.0, 0.0, 0.0, 1.0);
+  fn fragmentMain(input: VertexOutput) -> @location(0) vec4f {
+    let colorIndex = i32(input.color);
+
+    var color: vec4f;
+
+    // 16 is LDraw's "current color"
+    // 24 is LDraw's "current line color"
+    if (colorIndex == 24 || colorIndex == 16) {
+      color = vec4f(0.2, 0.2, 0.2, 1.0);
+    } else {
+      let x = colorIndex % 256;
+      let y = colorIndex / 256;
+      color = textureLoad(edgeTexture, vec2i(x, y), 0);
+    }
+
+    return color;
   }
   `;
 
 const EDGE_SHADER = `
   struct VertexInput {
     @location(0) position: vec4f,
+    @location(1) color: f32,
   }
 
   struct VertexOutput {
     @builtin(position) position: vec4f,
+    @location(0) color: f32,
   }
 
   @group(0) @binding(0) var<uniform> rotationMatrix: mat4x4f;
@@ -736,6 +785,7 @@ const EDGE_SHADER = `
     var output: VertexOutput;
 
     output.position = rotationMatrix * input.position;
+    output.color = input.color;
     return output;
   }
   `;
@@ -744,6 +794,7 @@ const OPTIONAL_LINE_FUNCTION = `
   struct VertexOutput {
     @builtin(position) position: vec4f,
     @location(0) @interpolate(flat) shouldDiscard: f32,
+    @location(1) color: f32,
   }
 
   fn shouldShowLine(
@@ -751,7 +802,8 @@ const OPTIONAL_LINE_FUNCTION = `
     p2: vec4f,
     c1: vec4f,
     c2: vec4f,
-    vertexIndex: u32
+    vertexIndex: u32,
+    color: f32,
   ) -> VertexOutput {
 
     let edge = (p2 - p1).xyz;
@@ -784,6 +836,7 @@ const OPTIONAL_LINE_FUNCTION = `
     var output: VertexOutput;
     output.position = point;
     output.shouldDiscard = select(1.0, 0.0, shouldShow);
+    output.color = color;
     return output;
   }
 `;
@@ -791,6 +844,7 @@ const OPTIONAL_LINE_FUNCTION = `
 const OPTIONAL_LINE_SHADER = `
   struct VertexInput {
     @location(0) p1: vec4f,
+    @location(1) color: f32,
     @location(2) p2: vec4f,
     @location(4) c1: vec4f,
     @location(6) c2: vec4f,
@@ -808,7 +862,7 @@ const OPTIONAL_LINE_SHADER = `
     let c1 = rotationMatrix * input.c1;
     let c2 = rotationMatrix * input.c2;
 
-    return shouldShowLine(p1, p2, c1, c2, vertexIndex);
+    return shouldShowLine(p1, p2, c1, c2, vertexIndex, input.color);
   }
 
   ${OPTIONAL_LINE_FUNCTION}`;
@@ -887,6 +941,7 @@ const STUD_LINE_SHADER = `
 
   struct VertexOutput {
     @builtin(position) position: vec4f,
+    @location(0) color: f32,
   }
 
   @group(0) @binding(0) var<uniform> rotationMatrix: mat4x4f;
@@ -896,6 +951,7 @@ const STUD_LINE_SHADER = `
   @vertex
   fn vertexMain(
     @location(5) position: vec4f,
+    @location(6) color: f32,
     instance: InstanceInput
   ) -> VertexOutput {
     let instanceMatrix = mat4x4f(
@@ -907,6 +963,7 @@ const STUD_LINE_SHADER = `
 
     var output: VertexOutput;
     output.position = rotationMatrix * instanceMatrix * position;
+    output.color = select(color, instance.color, color == 16.0);
     return output;
   }
   `;
@@ -924,6 +981,7 @@ const STUD_OPTIONAL_LINE_SHADER = `
 
   struct VertexInput {
     @location(5) p1: vec4f,
+    @location(6) color: f32,
     @location(7) p2: vec4f,
     @location(9) c1: vec4f,
     @location(11) c2: vec4f,
@@ -950,7 +1008,10 @@ const STUD_OPTIONAL_LINE_SHADER = `
     let c1 = projection * input.c1;
     let c2 = projection * input.c2;
 
-    return shouldShowLine(p1, p2, c1, c2, vertexIndex);
+    return shouldShowLine(
+    p1, p2, c1, c2,
+    vertexIndex,
+    select(input.color, instance.color, input.color == 16.0));
   }
 
   ${OPTIONAL_LINE_FUNCTION}`;
@@ -959,7 +1020,10 @@ const OPTIONAL_LINE_FRAGMENT_SHADER = `
   struct VertexOutput {
     @builtin(position) position: vec4f,
     @location(0) @interpolate(flat) shouldDiscard: f32,
+    @location(1) color: f32,
   }
+
+  @group(0) @binding(3) var edgeTexture: texture_2d<f32>;
 
   @fragment
   fn fragmentMain(input: VertexOutput) -> @location(0) vec4f {
@@ -967,7 +1031,22 @@ const OPTIONAL_LINE_FRAGMENT_SHADER = `
     if (input.shouldDiscard < 0.5) {
       discard;
     }
-    return vec4f(0.0, 0.0, 0.0, 1.0);
+
+    let colorIndex = i32(input.color);
+
+    var color: vec4f;
+
+    // 16 is LDraw's "current color"
+    // 24 is LDraw's "current line color"
+    if (colorIndex == 24 || colorIndex == 16) {
+      color = vec4f(0.2, 0.2, 0.2, 1.0);
+    } else {
+      let x = colorIndex % 256;
+      let y = colorIndex / 256;
+      color = textureLoad(edgeTexture, vec2i(x, y), 0);
+    }
+
+    return color;
   }
 `;
 
