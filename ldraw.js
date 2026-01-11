@@ -27,7 +27,7 @@ export class MultiPartDocument {
     const allReferences = new Map();
 
     for (const parsed of files.values()) {
-      const interFileReferences = parsed.subFileReferences.filter((f) =>
+      const interFileReferences = parsed.fileGeometry.files.filter((f) =>
         allFiles.has(f.fileName)
       );
 
@@ -114,7 +114,7 @@ export class MultiPartDocument {
       const blockFileName = rawFileName.trim();
       const parsed = File.parse(blockFileName, contents);
       definedSubFiles.add(blockFileName);
-      parsed.subFileReferences.forEach((f) =>
+      parsed.fileGeometry.files.forEach((f) =>
         subFileReferences.add(f.fileName)
       );
       files.set(blockFileName, parsed);
@@ -122,7 +122,7 @@ export class MultiPartDocument {
 
     const allSubFiles = new Set(
       [...files.values()].flatMap((f) =>
-        f.subFileReferences.map((f) => f.fileName)
+        f.fileGeometry.files.map((f) => f.fileName)
       )
     );
 
@@ -133,15 +133,26 @@ export class MultiPartDocument {
 }
 
 export class File {
+  #geometry;
+
+  #fileGeometry;
+
+  /** @readonly @type {GeometryType[]}*/
+  static #geometryTypes = ["lines", "optionalLines", "triangles"];
+
   /**
    * @param {string} name
    * @param {Color[]} colors
-   * @param {readonly DrawCommand[]} commands
+   * @param {Geometry} geometry
+   * @param {FileGeometry} fileGeometry
+   * @param {Map<string, File>} subFiles
    */
-  constructor(name, colors, commands) {
+  constructor(name, colors, geometry, fileGeometry, subFiles) {
     this.name = name;
     this.colors = colors;
-    this.commands = commands;
+    this.#geometry = geometry;
+    this.#fileGeometry = fileGeometry;
+    this.subFiles = subFiles;
   }
 
   /**
@@ -155,22 +166,13 @@ export class File {
 
     const subFileMap = new Map(subFiles.map((f) => [f.name, f]));
 
-    const drawSubGeometryCommands = [];
-
-    for (const reference of parsedFile.subFileReferences) {
-      const subFile = subFileMap.get(reference.fileName);
-
-      if (!subFile) {
-        throw new Error(`Missing required subFile ${reference.fileName}`);
-      }
-
-      drawSubGeometryCommands.push(new DrawFile(subFile, reference));
-    }
-
-    return new File(name, parsedFile.colors, [
-      ...parsedFile.commands,
-      ...drawSubGeometryCommands,
-    ]);
+    return new File(
+      name,
+      parsedFile.colors,
+      parsedFile.geometry,
+      parsedFile.fileGeometry,
+      subFileMap
+    );
   }
 
   /**
@@ -180,14 +182,26 @@ export class File {
    * @returns {ParsedFile}
    */
   static parse(fileName, contents) {
-    const commands = [];
-    const subFileReferences = [];
-
     const colors = [];
 
     const BFC_INVERTNEXT = /^0\s+BFC\s+INVERTNEXT/;
 
     let invertNext = false;
+
+    /** @type {Geometry} */
+    const geometry = {
+      lines: [],
+      optionalLines: [],
+      triangles: [],
+      invertedTriangles: [],
+    };
+
+    /** @type {FileGeometry} */
+    const fileGeometry = {
+      studs: [],
+      files: [],
+    };
+
     for (const line of contents.split("\n")) {
       const command = line.trim();
 
@@ -200,42 +214,33 @@ export class File {
         invertNext = true;
       } else if ((parsed = Color.from(command))) {
         colors.push(parsed);
-      } else if ((parsed = DrawGeometry.from(command, invertNext))) {
+      } else if (parseGeometry(command, geometry)) {
+      } else if (parseDrawFile(command, invertNext, fileGeometry)) {
         invertNext = false;
-
-        commands.push(parsed);
-      } else if ((parsed = DrawSubGeometry.from(command, invertNext))) {
-        invertNext = false;
-
-        if (parsed instanceof DrawCommand) {
-          commands.push(parsed);
-        } else {
-          subFileReferences.push(parsed);
-        }
       }
     }
 
     return {
       fileName,
       colors,
-      commands,
-      subFileReferences,
-      subFilesToLoad: new Set(subFileReferences.map((f) => f.fileName)),
+      geometry,
+      fileGeometry,
+      subFilesToLoad: new Set(fileGeometry.files.map((f) => f.fileName)),
     };
   }
 
   /**
-   * @param {RenderArgs} [args]
+   * @param {number} color
+   * @param {Matrix} transformation
+   * @param {boolean} invert
    * @param {RenderResult} [accumulator]
    *
    * @returns {RenderResult}
    */
   render(
-    args = {
-      transformation: matrix.identity,
-      color: Color.CURRENT_COLOR_CODE,
-      invert: false,
-    },
+    color = Color.CURRENT_COLOR_CODE,
+    transformation = matrix.identity,
+    invert = false,
     accumulator
   ) {
     accumulator ??= {
@@ -245,11 +250,114 @@ export class File {
       studs: [],
     };
 
-    for (const command of this.commands) {
-      command.render(args, accumulator);
+    const [a, b, c, , d, e, f, , g, h, ii, , tx, ty, tz] = transformation;
+
+    for (const key of File.#geometryTypes) {
+      const destination = accumulator[key];
+
+      const array =
+        this.#geometry[
+          key === "triangles" && invert ? "invertedTriangles" : key
+        ];
+
+      this.#transformGeometry(
+        array,
+        destination,
+        color,
+        a,
+        d,
+        g,
+        tx,
+        b,
+        e,
+        h,
+        ty,
+        c,
+        f,
+        ii,
+        tz
+      );
+    }
+
+    const startingStudIndex = accumulator.studs.length;
+    accumulator.studs.length += this.#fileGeometry.studs.length;
+    let index = startingStudIndex;
+    for (const stud of this.#fileGeometry.studs) {
+      accumulator.studs[index] = {
+        color: stud.color === 16 ? color : stud.color,
+        invert: invert !== stud.invert,
+        transformation: matrix.multiply(transformation, stud.transformation),
+      };
+      index++;
+    }
+
+    for (let i = 0; i < this.#fileGeometry.files.length; i++) {
+      const reference = this.#fileGeometry.files[i];
+      const file = this.subFiles.get(reference.fileName);
+
+      if (!file) {
+        throw new Error(`Missing subfile ${reference.fileName}`);
+      }
+
+      file.render(
+        reference.color === 16 ? color : reference.color,
+        matrix.multiply(transformation, reference.transformation),
+        invert !== reference.invert,
+        accumulator
+      );
     }
 
     return accumulator;
+  }
+
+  /**
+   *
+   * @param {*} array
+   * @param {*} destination
+   * @param {number} color
+   * @param {number} a
+   * @param {number} d
+   * @param {number} g
+   * @param {number} tx
+   * @param {number} b
+   * @param {number} e
+   * @param {number} h
+   * @param {number} ty
+   * @param {number} c
+   * @param {number} f
+   * @param {number} ii
+   * @param {number} tz
+   */
+  #transformGeometry(
+    array,
+    destination,
+    color,
+    a,
+    d,
+    g,
+    tx,
+    b,
+    e,
+    h,
+    ty,
+    c,
+    f,
+    ii,
+    tz
+  ) {
+    for (let i = 0; i < array.length; i += 4) {
+      const x = array[i];
+      const y = array[i + 1];
+      const z = array[i + 2];
+
+      destination.push(a * x + d * y + g * z + tx);
+      destination.push(b * x + e * y + h * z + ty);
+      destination.push(c * x + f * y + ii * z + tz);
+
+      destination.push(
+        array[i + 3] === 16 || array[i + 3] === 24 ? color : array[i + 3]
+      );
+    }
   }
 
   /**
@@ -267,8 +375,10 @@ export class File {
 
     const optionalLines = new Float32Array(rawOptionalLines.length * 2);
 
-    for (let i = 0; i < rawOptionalLines.length; i += DrawOptionalLine.stride) {
-      const points = rawOptionalLines.slice(i, i + DrawOptionalLine.stride);
+    const optionalLineStride = 4 * 4;
+
+    for (let i = 0; i < rawOptionalLines.length; i += optionalLineStride) {
+      const points = rawOptionalLines.slice(i, i + optionalLineStride);
       const index = i * 2;
 
       // Optional lines are duplicated for the GPU because it needs to render
@@ -353,272 +463,83 @@ const LineType = Object.freeze({
   DrawOptionalLine: 5,
 });
 
-/** @abstract */
-class DrawCommand {
-  /**
-   * @param {number} color
-   * @param {boolean} invert
-   */
-  constructor(color, invert) {
-    this.color =
-      color === Color.CURRENT_COLOR_CODE || color === Color.EDGE_COLOR_CODE
-        ? null
-        : color;
-    this.invertedByParent = invert;
+/**
+ * @param {string} command
+ * @param {boolean} parentInvert
+ * @param {FileGeometry} geometry
+ *
+ * @returns {boolean}
+ */
+function parseDrawFile(command, parentInvert, geometry) {
+  const [type, unparsedColor, ...tokens] = command.split(/\s+/);
+
+  if (type !== LineType.DrawFile.toString()) {
+    return false;
   }
 
-  /**
-   * @abstract
-   *
-   * @param {RenderArgs} args
-   * @param {RenderResult} [accumulator]
-   *
-   * @returns {RenderResult}
-   */
-  render(args, accumulator) {
-    throw new Error("Not implemented");
-  }
+  const color = Number(unparsedColor);
 
-  /**
-   * @param {boolean} invert
-   */
-  shouldInvert(invert = false) {
-    return invert != this.invertedByParent;
-  }
-}
+  const fileName = command.match(/^(\S+\s+){14}(?<fileName>.*)/)?.groups
+    ?.fileName;
 
-/** @abstract */
-class DrawSubGeometry extends DrawCommand {
-  /**
-   * @param {SubFileReference} refererence
-   */
-  constructor({ color, transformation, invertSelf, parentInvert }) {
-    super(color, parentInvert);
-    this.transformation = transformation ?? matrix.identity;
-    this.invertSelf = invertSelf;
-  }
-
-  /**
-   * @param {RenderArgs} args
-   * @param {RenderResult} accumulator
-   *
-   * @returns {RenderResult}
-   */
-  render({ color, transformation, invert }, accumulator) {
-    this._renderInternal(
-      {
-        color: this.color ?? color,
-        transformation: matrix.multiply(transformation, this.transformation),
-        invert: this.shouldInvert(invert),
-      },
-      accumulator
-    );
-
-    return accumulator;
-  }
-
-  /**
-   * @abstract @protected
-   *
-   * @param {RenderArgs} args
-   * @param {RenderResult} accumulator
-   *
-   * @returns {RenderResult}
-   */
-  _renderInternal(args, accumulator) {
+  if (!fileName) {
     throw new Error(
-      "DrawSubGeometry is abstract. Did you mean to call a subclass?"
+      `Missing filename for draw file (type 1) command: ${command}`
     );
   }
 
+  const [x, y, z, a, b, c, d, e, f, g, h, i] = tokens.map(Number.parseFloat);
+
+  const invert = matrix.determinant(a, b, c, d, e, f, g, h, i) < 0;
+
   /**
-   * @param {string} command
-   * @param {boolean} parentInvert
+   * Map an LDraw matrix (where -y is out of the page)
+   * to a GPU matrix (where -z is out of the page).
    *
-   * @returns {SubFileReference | DrawStud | undefined}
+   * @type {Matrix}
    */
-  static from(command, parentInvert) {
-    const [type, unparsedColor, ...tokens] = command.split(/\s+/);
+  const transformation = [a, g, d, 0, c, i, f, 0, b, h, e, 0, x, z, y, 1];
 
-    if (type !== LineType.DrawFile.toString()) {
-      return undefined;
-    }
+  const args = {
+    fileName,
+    color,
+    transformation,
+    invert: parentInvert !== invert,
+  };
 
-    const color = Number(unparsedColor);
-
-    const fileName = command.match(/^(\S+\s+){14}(?<fileName>.*)/)?.groups
-      ?.fileName;
-
-    if (!fileName) {
-      throw new Error(
-        `Missing filename for draw file (type 1) command: ${command}`
-      );
-    }
-
-    const [x, y, z, a, b, c, d, e, f, g, h, i] = tokens.map(Number.parseFloat);
-
-    const invertSelf = matrix.determinant(a, b, c, d, e, f, g, h, i) < 0;
-
-    /**
-     * Map an LDraw matrix (where -y is out of the page)
-     * to a GPU matrix (where -z is out of the page).
-     *
-     * @type {Matrix}
-     */
-    const transformation = [a, g, d, 0, c, i, f, 0, b, h, e, 0, x, z, y, 1];
-
-    const reference = {
-      fileName,
-      color,
-      transformation,
-      invertSelf,
-      parentInvert,
-    };
-
-    return fileName === "stud.dat" ? new DrawStud(reference) : reference;
+  if (fileName === "stud.dat") {
+    geometry.studs.push(args);
+  } else {
+    geometry.files.push(args);
   }
 
-  /**
-   * @param {boolean} invert
-   */
-  shouldInvert(invert = false) {
-    return super.shouldInvert(invert) !== this.invertSelf;
-  }
+  return true;
 }
 
-class DrawFile extends DrawSubGeometry {
-  /**
-   * @param {File} file
-   * @param {SubFileReference} reference
-   */
-  constructor(file, reference) {
-    super(reference);
-    this.file = file;
+/**
+ * @param {string} command
+ * @param {Geometry} geometry
+ */
+function parseGeometry(command, geometry) {
+  const tokens = command.split(/\s+/);
+
+  const type = Number(tokens[0]);
+
+  const geometryType = GeometryMap[type];
+
+  if (!geometryType) {
+    return false;
   }
 
-  /**
-   * @protected
-   *
-   * @param {RenderArgs} args
-   * @param {RenderResult} accumulator
-   *
-   * @returns {RenderResult}
-   */
-  _renderInternal(args, accumulator) {
-    return this.file.render(args, accumulator);
-  }
-}
+  const [_type, color, ...points] = command.split(/\s+/).map(Number.parseFloat);
 
-class DrawStud extends DrawSubGeometry {
-  /**
-   * @param {SubFileReference} reference
-   */
-  constructor(reference) {
-    super(reference);
+  /** @type {Coordinate[]} */
+  let coordinates = [];
+  for (let i = 0; i < points.length; i += 3) {
+    coordinates.push([points[i], points[i + 2], points[i + 1]]);
   }
 
-  /**
-   * @protected
-   *
-   * @param {RenderArgs} args
-   * @param {RenderResult} accumulator
-   *
-   * @returns {RenderResult}
-   */
-  _renderInternal(args, accumulator) {
-    accumulator.studs.push(args);
-    return accumulator;
-  }
-}
-
-class DrawGeometry extends DrawCommand {
-  /** @type {keyof Geometry} */
-  type = "triangles";
-
-  /**
-   * @param {number} color
-   * @param {Coordinate[]} coordinates
-   * @param {boolean} invert
-   */
-  constructor(color, coordinates, invert) {
-    super(color, invert);
-
-    this.coordinates = coordinates;
-    this.invertedCoordinates = coordinates.toReversed();
-  }
-
-  /**
-   * @param {RenderArgs} args
-   * @param {RenderResult} accumulator
-   *
-   * @returns {RenderResult}
-   */
-  render({ color, transformation, invert }, accumulator) {
-    const geometry = accumulator[this.type];
-
-    const startingIndex = geometry.length;
-    const stride = 4; // (x y z c)
-    geometry.length += this.coordinates.length * stride;
-
-    const array = this.shouldInvert(invert)
-      ? this.invertedCoordinates
-      : this.coordinates;
-
-    const [a, b, c, , d, e, f, , g, h, ii, , tx, ty, tz] = transformation;
-
-    for (let i = 0; i < this.coordinates.length; i++) {
-      const index = startingIndex + i * stride;
-
-      const x = array[i][0];
-      const y = array[i][1];
-      const z = array[i][2];
-
-      geometry[index] = a * x + d * y + g * z + tx;
-      geometry[index + 1] = b * x + e * y + h * z + ty;
-      geometry[index + 2] = c * x + f * y + ii * z + tz;
-
-      geometry[index + 3] = this.color ?? color;
-    }
-
-    return accumulator;
-  }
-
-  /**
-   * @param {string} command
-   * @param {boolean} invert
-   */
-  static from(command, invert) {
-    const tokens = command.split(/\s+/);
-
-    const type = Number(tokens[0]);
-
-    const subclass = CommandMap[type];
-
-    if (!subclass) {
-      return undefined;
-    }
-
-    const [_type, color, ...points] = command
-      .split(/\s+/)
-      .map(Number.parseFloat);
-
-    /** @type {Coordinate[]} */
-    const coordinates = [];
-    for (let i = 0; i < points.length; i += 3) {
-      coordinates.push([points[i], points[i + 2], points[i + 1]]);
-    }
-
-    return new subclass(color, coordinates, invert);
-  }
-}
-
-class DrawQuadrilateral extends DrawGeometry {
-  /**
-   * @param {number} color
-   * @param {Coordinate[]} coordinates
-   * @param {boolean} invert
-   */
-  constructor(color, coordinates, invert) {
+  if (type === LineType.DrawQuadrilateral) {
     /*
      * Convert LDraw's quadrilateral vertexes
      * to a vertex list that can draw triangles
@@ -631,38 +552,52 @@ class DrawQuadrilateral extends DrawGeometry {
      * 4 <-- 3
      */
     const [one, two, three, four] = coordinates;
-    super(color, [one, two, three, three, four, one], invert);
+    coordinates = [one, two, three, three, four, one];
+  }
+
+  const array = geometry[geometryType];
+
+  addGeometryCoordinates(array, coordinates, color);
+
+  if (geometryType === "triangles") {
+    const invertedCoordinates = coordinates.toReversed();
+    addGeometryCoordinates(
+      geometry.invertedTriangles,
+      invertedCoordinates,
+      color
+    );
+  }
+
+  return true;
+}
+
+/**
+ * @param {number[]} array
+ * @param {Coordinate[]} coordinates
+ * @param {number} color
+ */
+function addGeometryCoordinates(array, coordinates, color) {
+  const startingIndex = array.length;
+  const stride = 4; // (x y z c)
+  array.length += coordinates.length * stride;
+
+  for (let i = 0; i < coordinates.length; i++) {
+    const index = startingIndex + i * stride;
+
+    array[index] = coordinates[i][0];
+    array[index + 1] = coordinates[i][1];
+    array[index + 2] = coordinates[i][2];
+
+    array[index + 3] = color;
   }
 }
 
-class DrawLine extends DrawGeometry {
-  /** @readonly */
-  type = "lines";
-
-  shouldInvert() {
-    // Never invert lines
-    return false;
-  }
-}
-
-class DrawOptionalLine extends DrawGeometry {
-  /** @readonly */
-  type = "optionalLines";
-
-  static stride = 4 * 4; // x y z c * 2 points * 2 control
-
-  shouldInvert() {
-    // Never invert lines
-    return false;
-  }
-}
-
-/** @type {Record<number, { new(color: number, coordinates: Coordinate[], invert: boolean): DrawGeometry}>} */
-const CommandMap = {
-  [LineType.DrawLine]: DrawLine,
-  [LineType.DrawOptionalLine]: DrawOptionalLine,
-  [LineType.DrawTriangle]: DrawGeometry,
-  [LineType.DrawQuadrilateral]: DrawQuadrilateral,
+/** @type {Record<number, Exclude<GeometryType, "studs">>} */
+const GeometryMap = {
+  [LineType.DrawLine]: "lines",
+  [LineType.DrawOptionalLine]: "optionalLines",
+  [LineType.DrawTriangle]: "triangles",
+  [LineType.DrawQuadrilateral]: "triangles",
 };
 
 export class Color {
@@ -788,8 +723,7 @@ export class Color {
  *   fileName: string;
  *   color: number;
  *   transformation: Matrix;
- *   invertSelf: boolean;
- *   parentInvert: boolean;
+ *   invert: boolean;
  * }} SubFileReference
  */
 
@@ -797,31 +731,25 @@ export class Color {
  * @typedef {{
  *   fileName: string;
  *   colors: Color[];
- *   commands: readonly DrawCommand[];
- *   subFileReferences: readonly SubFileReference[];
+ *   geometry: Geometry;
+ *   fileGeometry: FileGeometry;
  *   subFilesToLoad: Set<string>;
  * }} ParsedFile
  */
 
 /** @typedef {[number, number, number]} Coordinate */
 
-/** @typedef {[Coordinate, Coordinate, Coordinate]} Triangle */
-
 /** @typedef {[number, number, number, number]} Rgba */
-
-/**
- * @typedef {{
- *   points: [Coordinate, Coordinate];
- *   controlPoints?: [Coordinate, Coordinate] | undefined;
- * }} RenderLine
- */
 
 /**
  * @typedef {{
  *   lines: number[];
  *   optionalLines: number[];
  *   triangles: number[];
+ *   invertedTriangles: number[];
  * }} Geometry
+ *
+ * @typedef {"lines" | "optionalLines" | "triangles"} GeometryType
  */
 
 /**
@@ -832,7 +760,14 @@ export class Color {
  * }} RenderArgs
  */
 
-/** @typedef {Geometry & { studs: RenderArgs[] }} RenderResult */
+/**
+ * @typedef {{
+ *   studs: SubFileReference[];
+ *   files: SubFileReference[];
+ * }} FileGeometry
+ */
+
+/** @typedef {Omit<Geometry, "invertedTriangles"> & { studs: RenderArgs[] }} RenderResult */
 
 /**
  * @typedef {{

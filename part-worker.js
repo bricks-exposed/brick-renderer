@@ -46,6 +46,7 @@ self.onmessage = async function ({ data: { type, data, id } }) {
     }
     case "load:part": {
       try {
+        console.time("model load " + data);
         const file = await fileLoader.load(data);
 
         if (!file) {
@@ -60,6 +61,7 @@ self.onmessage = async function ({ data: { type, data, id } }) {
         }
 
         const geometry = file.geometry();
+        console.timeEnd("model load " + data);
 
         self.postMessage(
           {
