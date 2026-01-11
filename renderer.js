@@ -180,9 +180,9 @@ export class GpuRenderer {
       return cachedGeometry;
     }
 
-    const lines = this.#loadGeometry(geometry.lines, 3);
+    const lines = this.#loadGeometry(geometry.lines, 4);
 
-    const optionalLines = this.#loadGeometry(geometry.optionalLines, 12);
+    const optionalLines = this.#loadGeometry(geometry.optionalLines, 16);
 
     const triangles = this.#loadGeometry(geometry.triangles, 4);
 
@@ -319,12 +319,18 @@ export class GpuRenderer {
         entryPoint: "vertexMain",
         buffers: [
           {
-            arrayStride: 3 * 4,
+            arrayStride: 4 * 4,
             attributes: [
               {
                 format: "float32x3",
                 offset: 0,
                 shaderLocation: 0,
+              },
+              // color
+              {
+                format: "float32",
+                offset: 3 * 4,
+                shaderLocation: 1,
               },
             ],
           },
@@ -572,28 +578,52 @@ export class GpuRenderer {
         entryPoint: "vertexMain",
         buffers: [
           {
-            // (p1, p2, c1, c2) = 12 floats
-            arrayStride: 12 * 4,
+            // (p1, color, p2, color, c1, color, c2, color) = 16 floats
+            arrayStride: 16 * 4,
             attributes: [
               {
                 format: "float32x3",
                 offset: 0,
                 shaderLocation: 0, // point 1
               },
+              // color
               {
-                format: "float32x3",
+                format: "float32",
                 offset: 12,
-                shaderLocation: 1, // point 2
+                shaderLocation: 1,
               },
               {
                 format: "float32x3",
-                offset: 24,
-                shaderLocation: 2, // control point 1
+                offset: 16,
+                shaderLocation: 2, // point 2
+              },
+              // color
+              {
+                format: "float32",
+                offset: 28,
+                shaderLocation: 3,
               },
               {
                 format: "float32x3",
-                offset: 36,
-                shaderLocation: 3, // control point 2
+                offset: 32,
+                shaderLocation: 4, // control point 1
+              },
+              // color
+              {
+                format: "float32",
+                offset: 44,
+                shaderLocation: 5,
+              },
+              {
+                format: "float32x3",
+                offset: 48,
+                shaderLocation: 6, // control point 2
+              },
+              // color
+              {
+                format: "float32",
+                offset: 60,
+                shaderLocation: 7,
               },
             ],
           },
@@ -717,14 +747,12 @@ const OPTIONAL_LINE_FUNCTION = `
   }
 
   fn shouldShowLine(
-    projection: mat4x4f,
-    input: VertexInput,
+    p1: vec4f,
+    p2: vec4f,
+    c1: vec4f,
+    c2: vec4f,
     vertexIndex: u32
   ) -> VertexOutput {
-    let p1 = projection * input.p1;
-    let p2 = projection * input.p2;
-    let c1 = projection * input.c1;
-    let c2 = projection * input.c2;
 
     let edge = (p2 - p1).xyz;
     let toC1 = (c1 - p1).xyz;
@@ -763,9 +791,9 @@ const OPTIONAL_LINE_FUNCTION = `
 const OPTIONAL_LINE_SHADER = `
   struct VertexInput {
     @location(0) p1: vec4f,
-    @location(1) p2: vec4f,
-    @location(2) c1: vec4f,
-    @location(3) c2: vec4f,
+    @location(2) p2: vec4f,
+    @location(4) c1: vec4f,
+    @location(6) c2: vec4f,
   }
 
   @group(0) @binding(0) var<uniform> rotationMatrix: mat4x4f;
@@ -775,7 +803,12 @@ const OPTIONAL_LINE_SHADER = `
     input: VertexInput,
     @builtin(vertex_index) vertexIndex: u32
   ) -> VertexOutput {
-    return shouldShowLine(rotationMatrix, input, vertexIndex);
+    let p1 = rotationMatrix * input.p1;
+    let p2 = rotationMatrix * input.p2;
+    let c1 = rotationMatrix * input.c1;
+    let c2 = rotationMatrix * input.c2;
+
+    return shouldShowLine(p1, p2, c1, c2, vertexIndex);
   }
 
   ${OPTIONAL_LINE_FUNCTION}`;
@@ -891,9 +924,9 @@ const STUD_OPTIONAL_LINE_SHADER = `
 
   struct VertexInput {
     @location(5) p1: vec4f,
-    @location(6) p2: vec4f,
-    @location(7) c1: vec4f,
-    @location(8) c2: vec4f,
+    @location(7) p2: vec4f,
+    @location(9) c1: vec4f,
+    @location(11) c2: vec4f,
   }
 
   @group(0) @binding(0) var<uniform> rotationMatrix: mat4x4f;
@@ -901,7 +934,7 @@ const STUD_OPTIONAL_LINE_SHADER = `
   @vertex
   fn vertexMain(
     instance: InstanceInput,
-    vertex: VertexInput,
+    input: VertexInput,
     @builtin(vertex_index) vertexIndex: u32
   ) -> VertexOutput {
     let instanceMatrix = mat4x4f(
@@ -912,7 +945,12 @@ const STUD_OPTIONAL_LINE_SHADER = `
     );
     let projection = rotationMatrix * instanceMatrix;
 
-    return shouldShowLine(projection, vertex, vertexIndex);
+    let p1 = projection * input.p1;
+    let p2 = projection * input.p2;
+    let c1 = projection * input.c1;
+    let c2 = projection * input.c2;
+
+    return shouldShowLine(p1, p2, c1, c2, vertexIndex);
   }
 
   ${OPTIONAL_LINE_FUNCTION}`;

@@ -133,9 +133,6 @@ export class MultiPartDocument {
 }
 
 export class File {
-  /** @type {readonly { code: number; rgba: Rgba }[]} */
-  static globalColors = [];
-
   /**
    * @param {string} name
    * @param {Colors} colors
@@ -186,7 +183,7 @@ export class File {
     const commands = [];
     const subFileReferences = [];
 
-    let colors = Colors.from(File.globalColors);
+    const colors = [];
 
     const BFC_INVERTNEXT = /^0\s+BFC\s+INVERTNEXT/;
 
@@ -202,12 +199,12 @@ export class File {
       if (BFC_INVERTNEXT.test(command)) {
         invertNext = true;
       } else if ((parsed = Color.from(command))) {
-        colors = colors.newWith(parsed);
-      } else if ((parsed = DrawGeometry.from(command, invertNext, colors))) {
+        colors.push(parsed);
+      } else if ((parsed = DrawGeometry.from(command, invertNext))) {
         invertNext = false;
 
         commands.push(parsed);
-      } else if ((parsed = DrawSubGeometry.from(command, invertNext, colors))) {
+      } else if ((parsed = DrawSubGeometry.from(command, invertNext))) {
         invertNext = false;
 
         if (parsed instanceof DrawCommand) {
@@ -220,7 +217,7 @@ export class File {
 
     return {
       fileName,
-      colors,
+      colors: Colors.from(colors),
       commands,
       subFileReferences,
       subFilesToLoad: new Set(subFileReferences.map((f) => f.fileName)),
@@ -228,38 +225,26 @@ export class File {
   }
 
   /**
-   * @param {Partial<RenderArgs>} [args]
+   * @param {RenderArgs} [args]
    * @param {RenderResult} [accumulator]
    *
    * @returns {RenderResult}
    */
-  render(args, accumulator) {
+  render(
+    args = {
+      transformation: matrix.identity,
+      color: Color.CURRENT_COLOR_CODE,
+      invert: false,
+    },
+    accumulator
+  ) {
     accumulator ??= {
       lines: [],
+      optionalLines: [],
       triangles: [],
       studs: [],
     };
 
-    this.#render(
-      {
-        transformation: matrix.identity,
-        color: Color.CURRENT_COLOR,
-        invert: false,
-        ...args,
-      },
-      accumulator
-    );
-
-    return accumulator;
-  }
-
-  /**
-   * @param {RenderArgs} args
-   * @param {RenderResult} accumulator
-   *
-   * @returns {RenderResult}
-   */
-  #render(args, accumulator) {
     for (const command of this.commands) {
       command.render(args, accumulator);
     }
@@ -272,48 +257,24 @@ export class File {
    */
   geometry() {
     const {
-      lines: rawLines,
-      triangles: rawTriangles,
+      lines,
+      optionalLines: rawOptionalLines,
+      triangles,
       studs: rawStuds,
     } = this.render();
 
-    const { viewBox, center } = File.#boundingBox(rawLines);
+    const { viewBox, center } = File.#boundingBox(lines);
 
-    /** @type {number[]} */
-    const lines = [];
+    const optionalLines = new Float32Array(rawOptionalLines.length * 2);
 
-    /** @type {number[]} */
-    const optionalLines = [];
+    for (let i = 0; i < rawOptionalLines.length; i += DrawOptionalLine.stride) {
+      const points = rawOptionalLines.slice(i, i + DrawOptionalLine.stride);
+      const index = i * 2;
 
-    for (const line of rawLines) {
-      const points = line.points.flat();
-      if (line.controlPoints) {
-        // We need to draw
-        optionalLines.push(
-          ...points,
-          ...line.controlPoints.flat(),
-          ...points,
-          ...line.controlPoints.flat()
-        );
-      } else {
-        lines.push(...points);
-      }
-    }
-
-    const triangleStride = 12; // Three (x1 y1 z1 c)
-
-    const triangles = new Float32Array(rawTriangles.length * triangleStride);
-
-    for (let i = 0; i < rawTriangles.length; i++) {
-      const { vertices, color } = rawTriangles[i];
-      for (let j = 0; j < vertices.length; j++) {
-        let index = i * triangleStride + j * 4;
-        const vertex = vertices[j];
-        for (let k = 0; k < vertex.length; k++) {
-          triangles[index + k] = vertex[k];
-        }
-        triangles[index + vertex.length] = color.code;
-      }
+      // Optional lines are duplicated for the GPU because it needs to render
+      // each point considering both points and control points
+      optionalLines.set(points, index);
+      optionalLines.set(points, index + points.length);
     }
 
     const studStride = 17; // 16 matrix + 1 color
@@ -323,14 +284,14 @@ export class File {
       const args = rawStuds[i];
       const index = i * studStride;
       studs.set(args.transformation, index);
-      studs[index + 16] = args.color.code;
+      studs[index + 16] = args.color;
     }
 
     return {
       fileName: this.name,
       lines: new Float32Array(lines),
-      optionalLines: new Float32Array(optionalLines),
-      triangles: triangles,
+      optionalLines,
+      triangles: new Float32Array(triangles),
       studs: studs,
       viewBox,
       center,
@@ -338,7 +299,7 @@ export class File {
   }
 
   /**
-   * @param {RenderLine[]} lines
+   * @param {number[]} lines
    *
    * @returns {{ viewBox: number; center: [number, number, number]}}
    */
@@ -358,12 +319,10 @@ export class File {
       Number.NEGATIVE_INFINITY,
     ];
 
-    for (const { points } of lines) {
-      for (const point of points) {
-        for (let i = 0; i < point.length; i++) {
-          min[i] = Math.min(min[i], point[i]);
-          max[i] = Math.max(max[i], point[i]);
-        }
+    for (let i = 0; i < lines.length; i += 4) {
+      for (let j = 0; j < 3; j++) {
+        min[j] = Math.min(min[j], lines[i + j]);
+        max[j] = Math.max(max[j], lines[i + j]);
       }
     }
 
@@ -397,11 +356,11 @@ const LineType = Object.freeze({
 /** @abstract */
 class DrawCommand {
   /**
-   * @param {Color} color
+   * @param {number} color
    * @param {boolean} invert
    */
   constructor(color, invert) {
-    this.color = color.code === Color.CURRENT_COLOR_CODE ? null : color;
+    this.color = color === Color.CURRENT_COLOR_CODE ? null : color;
     this.invertedByParent = invert;
   }
 
@@ -472,11 +431,10 @@ class DrawSubGeometry extends DrawCommand {
   /**
    * @param {string} command
    * @param {boolean} parentInvert
-   * @param {Colors} colors
    *
    * @returns {SubFileReference | DrawStud | undefined}
    */
-  static from(command, parentInvert, colors) {
+  static from(command, parentInvert) {
     const [type, unparsedColor, ...tokens] = command.split(/\s+/);
 
     if (type !== LineType.DrawFile.toString()) {
@@ -508,7 +466,7 @@ class DrawSubGeometry extends DrawCommand {
 
     const reference = {
       fileName,
-      color: colors.for(color),
+      color,
       transformation,
       invertSelf,
       parentInvert,
@@ -570,29 +528,63 @@ class DrawStud extends DrawSubGeometry {
   }
 }
 
-/** @abstract */
 class DrawGeometry extends DrawCommand {
+  /** @type {keyof Geometry} */
+  type = "triangles";
+
   /**
-   * @param {Color} color
+   * @param {number} color
    * @param {Coordinate[]} coordinates
    * @param {boolean} invert
    */
   constructor(color, coordinates, invert) {
     super(color, invert);
 
-    if (new.target === DrawGeometry) {
-      throw new Error(
-        "DrawGeometry is abstract. Did you mean to provide a subclass?"
-      );
+    this.coordinates = coordinates;
+    this.invertedCoordinates = coordinates.toReversed();
+  }
+
+  /**
+   * @param {RenderArgs} args
+   * @param {RenderResult} accumulator
+   *
+   * @returns {RenderResult}
+   */
+  render({ color, transformation, invert }, accumulator) {
+    const geometry = accumulator[this.type];
+
+    const startingIndex = geometry.length;
+    const stride = 4; // (x y z c)
+    geometry.length += this.coordinates.length * stride;
+
+    const array = this.shouldInvert(invert)
+      ? this.invertedCoordinates
+      : this.coordinates;
+
+    const [a, b, c, , d, e, f, , g, h, ii, , tx, ty, tz] = transformation;
+
+    for (let i = 0; i < this.coordinates.length; i++) {
+      const index = startingIndex + i * stride;
+
+      const x = array[i][0];
+      const y = array[i][1];
+      const z = array[i][2];
+
+      geometry[index] = a * x + d * y + g * z + tx;
+      geometry[index + 1] = b * x + e * y + h * z + ty;
+      geometry[index + 2] = c * x + f * y + ii * z + tz;
+
+      geometry[index + 3] = this.color ?? color;
     }
+
+    return accumulator;
   }
 
   /**
    * @param {string} command
    * @param {boolean} invert
-   * @param {Colors} colors
    */
-  static from(command, invert, colors) {
+  static from(command, invert) {
     const tokens = command.split(/\s+/);
 
     const type = Number(tokens[0]);
@@ -613,102 +605,13 @@ class DrawGeometry extends DrawCommand {
       coordinates.push([points[i], points[i + 2], points[i + 1]]);
     }
 
-    return new subclass(colors.for(color), coordinates, invert);
-  }
-
-  /**
-   * @template {Coordinate[]} T
-   * @param {Matrix | null | undefined} transformation
-   * @param {T} coordinates
-   *
-   * @returns {T}
-   */
-  static transform(transformation, coordinates) {
-    return /** @type {T} */ (
-      coordinates.map((c) => this.transformCoordinate(transformation, c))
-    );
-  }
-
-  /**
-   * @param {Matrix | null | undefined} transformation
-   * @param {Coordinate} coordinate
-   *
-   * @returns {Coordinate}
-   */
-  static transformCoordinate(transformation, coordinate) {
-    if (!transformation || transformation === matrix.identity) {
-      return coordinate;
-    }
-
-    const [x, y, z] = coordinate;
-    const [a, b, c, , d, e, f, , g, h, i, , tx, ty, tz] = transformation;
-    return [
-      a * x + d * y + g * z + tx,
-      b * x + e * y + h * z + ty,
-      c * x + f * y + i * z + tz,
-    ];
+    return new subclass(color, coordinates, invert);
   }
 }
 
-class DrawTriangle extends DrawGeometry {
-  /** @readonly @type {Triangle[]} */
-  triangles;
-
-  /** @readonly @type {Triangle[]} */
-  invertedTriangles;
-
+class DrawQuadrilateral extends DrawGeometry {
   /**
-   * @param {Color} color
-   * @param {Coordinate[]} coordinates
-   * @param {boolean} invert
-   */
-  constructor(color, coordinates, invert) {
-    super(color, coordinates, invert);
-
-    this.triangles = [];
-    this.invertedTriangles = [];
-
-    for (let i = 0; i < coordinates.length; i += 3) {
-      this.triangles.push([
-        coordinates[i],
-        coordinates[i + 1],
-        coordinates[i + 2],
-      ]);
-      this.invertedTriangles.push([
-        coordinates[i + 2],
-        coordinates[i + 1],
-        coordinates[i],
-      ]);
-    }
-  }
-
-  /**
-   * @param {RenderArgs} args
-   * @param {RenderResult} accumulator
-   *
-   * @returns {RenderResult}
-   */
-  render({ color, transformation, invert }, accumulator) {
-    const geometry = accumulator.triangles;
-
-    const triangles = this.shouldInvert(invert)
-      ? this.invertedTriangles
-      : this.triangles;
-
-    for (const triangle of triangles) {
-      geometry.push({
-        vertices: DrawGeometry.transform(transformation, triangle),
-        color: this.color ?? color,
-      });
-    }
-
-    return accumulator;
-  }
-}
-
-class DrawQuadrilateral extends DrawTriangle {
-  /**
-   * @param {Color} color
+   * @param {number} color
    * @param {Coordinate[]} coordinates
    * @param {boolean} invert
    */
@@ -730,46 +633,8 @@ class DrawQuadrilateral extends DrawTriangle {
 }
 
 class DrawLine extends DrawGeometry {
-  /** @readonly @type {[Coordinate, Coordinate]} */
-  coordinates;
-
-  /** @readonly @type {[Coordinate, Coordinate] | undefined} */
-  controlPoints;
-
-  /**
-   * @param {Color} color
-   * @param {Coordinate[]} coordinates
-   * @param {boolean} _invert
-   */
-  constructor(color, coordinates, _invert) {
-    super(color, coordinates, false);
-    const [first, second, control1, control2] = coordinates;
-    this.coordinates = [first, second];
-    this.controlPoints = control1 ? [control1, control2] : undefined;
-  }
-
-  /**
-   * @param {RenderArgs} args
-   * @param {RenderResult} accumulator
-   *
-   * @returns {RenderResult}
-   */
-  render({ transformation }, accumulator) {
-    const geometry = accumulator.lines;
-
-    const points = DrawGeometry.transform(transformation, this.coordinates);
-
-    const controlPoints = this.controlPoints
-      ? DrawGeometry.transform(transformation, this.controlPoints)
-      : undefined;
-
-    geometry.push({
-      points,
-      controlPoints,
-    });
-
-    return accumulator;
-  }
+  /** @readonly */
+  type = "lines";
 
   shouldInvert() {
     // Never invert lines
@@ -777,11 +642,23 @@ class DrawLine extends DrawGeometry {
   }
 }
 
-/** @type {Record<number, { new(color: Color, coordinates: Coordinate[], invert: boolean): DrawGeometry}>} */
+class DrawOptionalLine extends DrawGeometry {
+  /** @readonly */
+  type = "optionalLines";
+
+  static stride = 4 * 4; // x y z c * 2 points * 2 control
+
+  shouldInvert() {
+    // Never invert lines
+    return false;
+  }
+}
+
+/** @type {Record<number, { new(color: number, coordinates: Coordinate[], invert: boolean): DrawGeometry}>} */
 const CommandMap = {
   [LineType.DrawLine]: DrawLine,
-  [LineType.DrawOptionalLine]: DrawLine,
-  [LineType.DrawTriangle]: DrawTriangle,
+  [LineType.DrawOptionalLine]: DrawOptionalLine,
+  [LineType.DrawTriangle]: DrawGeometry,
   [LineType.DrawQuadrilateral]: DrawQuadrilateral,
 };
 
@@ -951,7 +828,7 @@ export class Color {
 /**
  * @typedef {{
  *   fileName: string;
- *   color: Color;
+ *   color: number;
  *   transformation: Matrix;
  *   invertSelf: boolean;
  *   parentInvert: boolean;
@@ -983,14 +860,15 @@ export class Color {
 
 /**
  * @typedef {{
- *   lines: RenderLine[];
- *   triangles: { vertices: Triangle; color: Color }[];
+ *   lines: number[];
+ *   optionalLines: number[];
+ *   triangles: number[];
  * }} Geometry
  */
 
 /**
  * @typedef {{
- *   color: Color;
+ *   color: number;
  *   transformation: Matrix;
  *   invert: boolean;
  * }} RenderArgs

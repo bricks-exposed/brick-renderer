@@ -2,7 +2,7 @@
 /** @import { TypedWorker, TypedInnerWorker } from "./async-worker.js" */
 import { PartDb } from "./part-db.js";
 import { FileLoader } from "./file-loader.js";
-import { Colors, File } from "./ldraw.js";
+import { Colors } from "./ldraw.js";
 
 /** @type {FileLoader} */
 let fileLoader;
@@ -35,8 +35,6 @@ self.onmessage = async function ({ data: { type, data, id } }) {
       }
 
       colors ??= configFile.colors;
-
-      File.globalColors = colors.all;
 
       self.postMessage({
         type: "initialize",
@@ -79,6 +77,8 @@ self.onmessage = async function ({ data: { type, data, id } }) {
           ]
         );
       } catch (e) {
+        console.error(e);
+
         self.postMessage({
           type: "load:part",
           id,
