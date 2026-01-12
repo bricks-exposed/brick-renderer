@@ -5,10 +5,114 @@
  *  number, number, number, number, // column 3
  *  number, number, number, number, // column 4
  * ]} Matrix
+ *
+ * @typedef {[number, number, number, number]} Quaternion
  */
 
 /** @type {Matrix} */
 export const identity = [1, 0, 0, 0, 0, 1, 0, 0, 0, 0, 1, 0, 0, 0, 0, 1];
+
+/** @type {Quaternion} */
+export const identityQuaternion = [0, 0, 0, 1];
+
+/**
+ * @param {number} angle
+ * @param {0 | 1 | 2} axis 0 = x, 1 = y, 2 = z
+ *
+ * @returns {Quaternion}
+ */
+export function angleToQuaternion(angle, axis) {
+  const halfAngle = angle / 2;
+
+  /** @type {Quaternion} */
+  const q = [0, 0, 0, Math.cos(halfAngle)];
+
+  q[axis] = Math.sin(halfAngle);
+
+  return q;
+}
+
+/**
+ * Create a quaternion from Euler angles (X-Y-Z order)
+ * @param {number} rotateX - Radians
+ * @param {number} rotateY - Radians
+ * @param {number} rotateZ - Radians
+ * @returns {Quaternion}
+ */
+export function quaternionFromEuler(rotateX, rotateY, rotateZ) {
+  const cx = Math.cos(rotateX / 2);
+  const cy = Math.cos(rotateY / 2);
+  const cz = Math.cos(rotateZ / 2);
+  const sx = Math.sin(rotateX / 2);
+  const sy = Math.sin(rotateY / 2);
+  const sz = Math.sin(rotateZ / 2);
+
+  return [
+    sx * cy * cz + cx * sy * sz,
+    cx * sy * cz - sx * cy * sz,
+    cx * cy * sz + sx * sy * cz,
+    cx * cy * cz - sx * sy * sz,
+  ];
+}
+
+/**
+ * @param {Quaternion} a
+ * @param {Quaternion} b
+ * @returns {Quaternion}
+ */
+export function multiplyQuaternion(a, b) {
+  const [ax, ay, az, aw] = a;
+  const [bx, by, bz, bw] = b;
+
+  return [
+    ax * bw + aw * bx + ay * bz - az * by,
+    ay * bw + aw * by + az * bx - ax * bz,
+    az * bw + aw * bz + ax * by - ay * bx,
+    aw * bw - ax * bx - ay * by - az * bz,
+  ];
+}
+
+/**
+ * Convert quaternion to rotation matrix
+ * @param {Quaternion} q
+ * @returns {Matrix}
+ */
+export function fromQuaternion(q) {
+  const [x, y, z, w] = q;
+
+  const x2 = x + x;
+  const y2 = y + y;
+  const z2 = z + z;
+
+  const xx = x * x2;
+  const xy = x * y2;
+  const xz = x * z2;
+  const yy = y * y2;
+  const yz = y * z2;
+  const zz = z * z2;
+  const wx = w * x2;
+  const wy = w * y2;
+  const wz = w * z2;
+
+  return [
+    1 - (yy + zz),
+    xy + wz,
+    xz - wy,
+    0,
+    xy - wz,
+    1 - (xx + zz),
+    yz + wx,
+    0,
+    xz + wy,
+    yz - wx,
+    1 - (xx + yy),
+    0,
+    0,
+    0,
+    0,
+    1,
+  ];
+}
 
 /**
  * Apply a series of transforms to a matrix.

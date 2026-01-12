@@ -249,10 +249,10 @@ export class BrickRenderer extends HTMLElement {
 
     const scaling = 512 / this.size;
 
-    this.model?.transformation.rotateBy({
-      z: event.movementX * scaling,
-      x: -event.movementY * scaling,
-    });
+    this.model?.transformation.orbit(
+      -event.movementY * scaling,
+      -event.movementX * scaling
+    );
 
     this.update();
   };

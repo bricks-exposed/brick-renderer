@@ -8,10 +8,10 @@ export class Model {
   static loader;
 
   static #INITIAL_TRANSFORMATION = {
-    rotateX: 60,
+    rotateX: 90,
     rotateY: 0,
     rotateZ: 45,
-    scale: 0.6,
+    scale: 0.8,
   };
 
   /** @readonly */
@@ -54,13 +54,19 @@ export class Model {
 }
 
 class Transformation {
-  #defaultTransformation;
+  #defaultScale;
 
-  #transformation;
+  #defaultRotation;
+
+  #scale;
 
   #viewBox;
 
   #center;
+
+  #pitch;
+
+  #yaw;
 
   /**
    * @param {Transform} defaultTransformation
@@ -68,60 +74,46 @@ class Transformation {
    * @param {[number, number, number]} center
    */
   constructor(defaultTransformation, viewBox, center) {
-    this.#defaultTransformation = defaultTransformation;
-    this.#transformation = defaultTransformation;
+    this.#defaultScale = defaultTransformation.scale;
+    this.#defaultRotation = matrix.quaternionFromEuler(
+      (defaultTransformation.rotateX * Math.PI) / 180,
+      (defaultTransformation.rotateY * Math.PI) / 180,
+      (defaultTransformation.rotateZ * Math.PI) / 180
+    );
+    this.#pitch = 0;
+    this.#yaw = 0;
+    this.#scale = this.#defaultScale;
     this.#viewBox = viewBox;
     this.#center = center;
   }
 
   /**
-   * @param {Partial<Transform>} transformation
+   * @param {number} pitch
+   * @param {number} yaw
    */
-  transform(transformation) {
-    this.#transformation = { ...this.#transformation, ...transformation };
-    return this;
-  }
-
-  /**
-   * @param {Partial<Record<"x" | "y" | "z", number>>} degrees
-   */
-  rotateBy(degrees) {
-    this.transform({
-      rotateX: (this.#transformation.rotateX + (degrees.x || 0)) % 360,
-      rotateY: (this.#transformation.rotateY + (degrees.y || 0)) % 360,
-      rotateZ: (this.#transformation.rotateZ + (degrees.z || 0)) % 360,
-    });
+  orbit(pitch, yaw) {
+    this.#pitch += (pitch * Math.PI) / 180;
+    this.#yaw += (yaw * Math.PI) / 180;
   }
 
   /**
    * @param {number} to
    */
   scale(to) {
-    this.transform({
-      scale: to,
-    });
+    this.#scale = to;
   }
 
   reset() {
-    this.#transformation = this.#defaultTransformation;
-  }
-
-  /**
-   * @returns {Readonly<Transform>}
-   */
-  get transformation() {
-    return this.#transformation;
+    this.#scale = this.#defaultScale;
+    this.#pitch = 0;
+    this.#yaw = 0;
   }
 
   get matrix() {
-    const { rotateX, rotateY, rotateZ } = this.transformation;
-
-    const transformation = {
-      ...this.transformation,
-      rotateX: (rotateX * Math.PI) / 180,
-      rotateY: (rotateY * Math.PI) / 180,
-      rotateZ: (rotateZ * Math.PI) / 180,
-    };
+    const rotation = matrix.multiplyQuaternion(
+      matrix.quaternionFromEuler(this.#pitch, this.#yaw, 0),
+      this.#defaultRotation
+    );
 
     return matrix.transform(
       [
@@ -133,10 +125,8 @@ class Transformation {
           -(this.#viewBox * 5),
           this.#viewBox * 5
         ),
-        matrix.fromRotationX(transformation.rotateX),
-        matrix.fromRotationY(transformation.rotateY),
-        matrix.fromRotationZ(transformation.rotateZ),
-        matrix.fromScaling(transformation.scale),
+        matrix.fromQuaternion(rotation),
+        matrix.fromScaling(this.#scale),
         matrix.fromTranslation(
           -this.#center[0],
           -this.#center[1],
