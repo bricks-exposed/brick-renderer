@@ -4,11 +4,12 @@ import { Model } from "./model.js";
 
 const styleSheet = new CSSStyleSheet();
 styleSheet.replaceSync(`
-  :host {
+  .root {
     display: inline-grid;
 
     grid-template-areas: "canvas";
     align-items: start;
+    justify-items: start;
 
     --grid: 64px;
 
@@ -142,8 +143,11 @@ export class BrickRenderer extends HTMLElement {
       this.getAttribute(BrickRenderer.#COLOR_ATTRIBUTE) ??
       BrickRenderer.#INITIAL_COLOR;
 
-    this.shadow = this.attachShadow({ mode: "open" });
-    this.shadow.adoptedStyleSheets = [styleSheet];
+    const shadow = this.attachShadow({ mode: "open" });
+    shadow.adoptedStyleSheets = [styleSheet];
+
+    this.root = document.createElement("div");
+    this.root.classList.add("root");
 
     this.size = Number(this.getAttribute("size") ?? 512);
 
@@ -173,7 +177,9 @@ export class BrickRenderer extends HTMLElement {
 
     this.form = this.#createForm();
 
-    this.shadow.append(this.canvas, this.form);
+    this.root.append(this.canvas, this.form);
+
+    shadow.append(this.root);
 
     this.file = this.getAttribute(BrickRenderer.#FILE_ATTRIBUTE);
   }
@@ -233,9 +239,7 @@ export class BrickRenderer extends HTMLElement {
   }
 
   #updateCanvasSize() {
-    if (this.shadow.host instanceof HTMLElement) {
-      this.shadow.host.style.setProperty("--canvas-size", `${this.size}px`);
-    }
+    this.root.style.setProperty("--canvas-size", `${this.size}px`);
 
     this.canvas.width = this.size * window.devicePixelRatio;
     this.canvas.height = this.size * window.devicePixelRatio;
