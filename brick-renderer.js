@@ -1,6 +1,8 @@
 import { CanvasRenderer } from "./canvas-renderer.js";
 import { Color } from "./ldraw.js";
 import { Model } from "./model.js";
+import { orbitControls } from "./orbit.js";
+import { Transformation } from "./transformation.js";
 
 const styleSheet = new CSSStyleSheet();
 styleSheet.replaceSync(`
@@ -155,23 +157,11 @@ export class BrickRenderer extends HTMLElement {
 
     this.#updateCanvasSize();
 
-    this.stopOrbiting = () => {
-      window.removeEventListener("pointermove", this.orbit);
-    };
+    this.transformation = new Transformation();
 
-    /**
-     * @param {PointerEvent} e
-     */
-    this.startOrbiting = (e) => {
-      window.addEventListener("pointerup", this.stopOrbiting, {
-        passive: true,
-      });
-      window.addEventListener("pointermove", this.orbit, { passive: true });
-    };
-
-    this.canvas.addEventListener("pointerdown", this.startOrbiting, {
-      passive: true,
-    });
+    this.cleanupOrbit = orbitControls(this.canvas, this.transformation, () =>
+      this.update()
+    );
 
     this.renderer = new CanvasRenderer(this.canvas);
 
@@ -195,9 +185,7 @@ export class BrickRenderer extends HTMLElement {
   }
 
   disconnectedCallback() {
-    this.canvas.removeEventListener("pointerdown", this.startOrbiting);
-    window.removeEventListener("pointermove", this.orbit);
-    window.removeEventListener("pointerup", this.stopOrbiting);
+    this.cleanupOrbit();
   }
 
   /**
@@ -245,32 +233,16 @@ export class BrickRenderer extends HTMLElement {
     this.canvas.height = this.size * window.devicePixelRatio;
   }
 
-  /** @type {(event: PointerEvent) => void} */
-  orbit = (event) => {
-    if (!(event.buttons & 1)) {
-      return;
-    }
-
-    const scaling = 512 / this.size;
-
-    this.model?.transformation.orbit(
-      -event.movementY * scaling,
-      -event.movementX * scaling
-    );
-
-    this.update();
-  };
-
   update() {
     if (!this.model || !this.stud) {
       return;
     }
 
-    this.renderer.render(this.model, this.stud);
+    this.renderer.render(this.model, this.transformation, this.stud);
   }
 
   reset() {
-    this.model?.transformation.reset();
+    this.transformation.reset();
     this.update();
   }
 
@@ -288,7 +260,7 @@ export class BrickRenderer extends HTMLElement {
   #createForm() {
     const form = document.createElement("form");
 
-    const scale = this.#createSlider("Scale", "scale", "60", "10", "200", "1");
+    const scale = this.#createSlider("Scale", "scale", "80", "50", "500", "1");
 
     const reset = document.createElement("button");
     reset.ariaLabel = "Reset";
@@ -324,7 +296,7 @@ export class BrickRenderer extends HTMLElement {
     input.defaultValue = value;
 
     const update = () => {
-      this.model?.transformation.scale(Number.parseFloat(input.value) / 100);
+      this.transformation.scale(Number.parseFloat(input.value) / 100);
 
       this.update();
     };

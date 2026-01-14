@@ -1,5 +1,6 @@
 import { GpuRenderer } from "./renderer.js";
 import { Model } from "./model.js";
+import { Transformation } from "./transformation.js";
 
 export class CanvasRenderer {
   /** @type {GpuRenderer} */
@@ -48,12 +49,13 @@ export class CanvasRenderer {
 
   /**
    * @param {Model} model
+   * @param {Transformation} transformation
    * @param {Model} stud
    */
-  render(model, stud) {
+  render(model, transformation, stud) {
     this.#renderFn.render(
       model.color,
-      model.transformation.matrix,
+      model.matrix(transformation),
       model.geometry,
       stud.geometry
     );
