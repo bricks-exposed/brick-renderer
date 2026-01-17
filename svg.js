@@ -75,10 +75,12 @@ function render(svg, model, transformation) {
     ty,
     tz
   );
-  console.log(triangles.length, lines.length);
+  // .map((t, i) => (i % 3 === 0 ? t : undefined))
+  // .filter((t) => !!t);
+  // console.log(triangles.length, lines.length);
 
-  const contents = [...sortTriangles(triangles)].map(draw);
-  console.log(contents.length);
+  const contents = [...newellsAlgorithm(triangles)].map(draw);
+  // console.log(contents.length);
 
   svg.innerHTML = contents.join("");
 }
@@ -93,12 +95,109 @@ function draw(geometry) {
     const p3 = geometry.p3;
     return `<polygon points="${p1.x}, ${p1.y} ${p2.x}, ${p2.y} ${p3.x}, ${
       p3.y
-    }" fill="rgba(${
+    }" fill="rgba(${244 * Math.random()} ${244 * Math.random()} ${
       244 * Math.random()
-    } 72 72)" stroke="green" stroke-width="0.0" stroke-linejoin="round"" />`;
+    })" stroke="green" stroke-width="0.0" stroke-linejoin="round"" />`;
   } else {
     return `<line x1="${p1.x}" y1="${p1.y}" x2="${p2.x}" y2="${p2.y}" stroke="black" stroke-width="0.01" stroke-linecap="round" />`;
   }
+}
+
+/**
+ * @param {Triangle[]} triangles
+ * @returns {Triangle[]}
+ */
+function newellsAlgorithm(triangles) {
+  const out = triangles
+    .map((t) => ({ ...t, boundingBox: boundingBox(t), plane: getPlane(t) }))
+    .sort((a, b) => a.boundingBox.minZ - b.boundingBox.minZ);
+
+  // console.log(out);
+
+  /** @type {Map<number, Set<number>>} */
+  const edges = new Map();
+
+  const FACE_INDEX = 25;
+  const STUD_INDEX = 10;
+
+  /*
+    Draw 0 before 10, 11, 16
+    Draw 10 before 11, 16
+    Draw 11 before 16
+    Draw 16 before nothing
+    Draw 25 before 0, 10, 11
+  */
+
+  for (let i = 0; i < out.length; i++) {
+    edges.set(i, new Set());
+  }
+
+  // console.log(edges.size);
+
+  for (let i = 0; i < out.length; i++) {
+    const a = out[i];
+
+    for (let j = i + 1; j < out.length; j++) {
+      const b = out[j];
+
+      const shouldLog =
+        false &&
+        i === Math.min(FACE_INDEX, STUD_INDEX) &&
+        j === Math.max(FACE_INDEX, STUD_INDEX);
+
+      if (!boundsOverlap(a.boundingBox, b.boundingBox)) {
+        console.assert(!shouldLog, "bounds don't overlap", a, b);
+        continue;
+      }
+
+      if (a.boundingBox.minZ > b.boundingBox.maxZ) {
+        console.assert(!shouldLog, `${i} is fully in front of ${j}`);
+        edges.get(j)?.add(i);
+
+        continue;
+      }
+
+      if (b.boundingBox.minZ > a.boundingBox.maxZ) {
+        console.assert(!shouldLog, `${j} is fully in front of ${i}`);
+        edges.get(i)?.add(j);
+
+        continue;
+      }
+
+      const aSideOfB = compareSideOfPlaneToCamera(b.plane, a);
+      const bSideOfA = compareSideOfPlaneToCamera(a.plane, b);
+
+      console.assert(!shouldLog, a, b, aSideOfB, bSideOfA);
+
+      if (aSideOfB === bSideOfA) {
+        if (a.boundingBox.maxZ > b.boundingBox.maxZ) {
+          edges.get(j)?.add(i);
+
+          continue;
+        } else {
+          edges.get(i)?.add(j);
+
+          continue;
+        }
+      }
+
+      if (aSideOfB === 1 || bSideOfA === -1) {
+        edges.get(j)?.add(i);
+
+        continue;
+      }
+
+      if (aSideOfB === -1 || bSideOfA === 1) {
+        edges.get(i)?.add(j);
+
+        continue;
+      }
+    }
+  }
+
+  const sorted = topoSortWithSCC(edges, out.length);
+
+  return sorted.map((i) => out[i]);
 }
 
 /**
@@ -193,7 +292,7 @@ function topologicalSort(edges, count) {
   for (const [, targets] of edges) {
     for (const t of targets) inDegree[t]++;
   }
-  // console.log(inDegree);
+  // console.log(JSON.stringify(inDegree));
 
   const queue = [];
   for (let i = 0; i < inDegree.length; i++) {
@@ -208,18 +307,25 @@ function topologicalSort(edges, count) {
     result.push(node);
     added.add(node);
     for (const target of edges.get(node) || []) {
+      // console.log(inDegree[target]);
       inDegree[target]--;
       if (inDegree[target] === 0) queue.push(target);
     }
   }
 
-  // Handle cycles: add remaining nodes in index order (which is Z-sorted)
   if (added.size !== count) {
+    const cyclic = nodesInCyclesTarjan(edges, count);
     console.warn(
-      `Cycle detected! Only sorted ${added.size} of ${count} triangles`
+      `Cycle detected! Sorted ${added.size}/${count}. ` +
+        `Nodes actually in cycles: ${[...cyclic]
+          .sort((a, b) => a - b)
+          .join(", ")}`
     );
+
     for (let i = 0; i < count; i++) {
       if (!added.has(i)) {
+        // Optional: only log if it's truly cyclic
+        if (cyclic.has(i)) console.log("cycle node:", i);
         result.push(i);
       }
     }
@@ -228,6 +334,199 @@ function topologicalSort(edges, count) {
   return result;
 }
 
+/**
+ * Tarjan SCC. Returns:
+ * - compOf[v] = component id
+ * - comps = array of components (each is an array of nodes)
+ */
+function tarjanSCC(edges, count) {
+  let index = 0;
+  const stack = [];
+  const onStack = new Array(count).fill(false);
+  const idx = new Array(count).fill(-1);
+  const low = new Array(count).fill(0);
+
+  const compOf = new Array(count).fill(-1);
+  const comps = [];
+
+  function strongConnect(v) {
+    idx[v] = index;
+    low[v] = index;
+    index++;
+
+    stack.push(v);
+    onStack[v] = true;
+
+    const targets = edges.get(v);
+    if (targets) {
+      for (const w of targets) {
+        if (idx[w] === -1) {
+          strongConnect(w);
+          low[v] = Math.min(low[v], low[w]);
+        } else if (onStack[w]) {
+          low[v] = Math.min(low[v], idx[w]);
+        }
+      }
+    }
+
+    if (low[v] === idx[v]) {
+      const comp = [];
+      while (true) {
+        const w = stack.pop();
+        onStack[w] = false;
+        compOf[w] = comps.length;
+        comp.push(w);
+        if (w === v) break;
+      }
+      comps.push(comp);
+    }
+  }
+
+  for (let v = 0; v < count; v++) {
+    if (idx[v] === -1) strongConnect(v);
+  }
+
+  return { compOf, comps };
+}
+
+/**
+ * Topo sort but cycle-aware:
+ * 1) compute SCCs
+ * 2) topo sort the SCC DAG
+ * 3) expand SCCs; inside each SCC, output nodes by index (your Z-order)
+ *
+ * @param {Map<number, Set<number>>} edges
+ * @param {number} count
+ */
+function topoSortWithSCC(edges, count) {
+  const { compOf, comps } = tarjanSCC(edges, count);
+  const compCount = comps.length;
+
+  // Build condensed DAG over components
+  const compEdges = Array.from({ length: compCount }, () => new Set());
+  const compInDeg = new Array(compCount).fill(0);
+
+  for (let u = 0; u < count; u++) {
+    const cu = compOf[u];
+    const targets = edges.get(u);
+    if (!targets) continue;
+    for (const v of targets) {
+      const cv = compOf[v];
+      if (cu === cv) continue; // internal SCC edge
+      if (!compEdges[cu].has(cv)) {
+        compEdges[cu].add(cv);
+        compInDeg[cv]++;
+      }
+    }
+  }
+
+  // Tie-break components by smallest node index in the component (keeps your Z-order feel)
+  const compKey = comps.map((nodes) => Math.min(...nodes));
+
+  // Kahn on component DAG
+  const queue = [];
+  for (let c = 0; c < compCount; c++) {
+    if (compInDeg[c] === 0) queue.push(c);
+  }
+  queue.sort((a, b) => compKey[a] - compKey[b]);
+
+  const compOrder = [];
+  let qh = 0;
+  while (qh < queue.length) {
+    const c = queue[qh++];
+    compOrder.push(c);
+    for (const nxt of compEdges[c]) {
+      compInDeg[nxt]--;
+      if (compInDeg[nxt] === 0) {
+        queue.push(nxt);
+        // keep queue ordered by tie-break key (simple insertion sort step)
+        for (let i = queue.length - 1; i > qh; i--) {
+          if (compKey[queue[i]] < compKey[queue[i - 1]]) {
+            const tmp = queue[i];
+            queue[i] = queue[i - 1];
+            queue[i - 1] = tmp;
+          } else break;
+        }
+      }
+    }
+  }
+
+  // Expand components into node ordering
+  const result = [];
+  for (const c of compOrder) {
+    const nodes = comps[c].slice().sort((a, b) => a - b); // your Z/index order inside SCC
+    for (const n of nodes) result.push(n);
+  }
+
+  return result;
+}
+
+/**
+ * @param {Map<number, Set<number>>} edges
+ * @param {number} count
+ * @returns {Set<number>} nodes that are in directed cycles
+ */
+function nodesInCyclesTarjan(edges, count) {
+  let index = 0;
+  /** @type {number[]} */
+  const stack = [];
+  const onStack = new Array(count).fill(false);
+  const idx = new Array(count).fill(-1);
+  const low = new Array(count).fill(0);
+  const inCycle = new Set();
+
+  /**
+   * @param {number} v
+   */
+  function strongConnect(v) {
+    idx[v] = index;
+    low[v] = index;
+    index++;
+
+    stack.push(v);
+    onStack[v] = true;
+
+    const targets = edges.get(v);
+    if (targets) {
+      for (const w of targets) {
+        if (idx[w] === -1) {
+          strongConnect(w);
+          low[v] = Math.min(low[v], low[w]);
+        } else if (onStack[w]) {
+          low[v] = Math.min(low[v], idx[w]);
+        }
+      }
+    }
+
+    // Root of an SCC
+    if (low[v] === idx[v]) {
+      const comp = [];
+      while (true) {
+        const w = stack.pop();
+        if (w == null) {
+          break;
+        }
+        onStack[w] = false;
+        comp.push(w);
+        if (w === v) break;
+      }
+
+      if (comp.length > 1) {
+        for (const n of comp) inCycle.add(n);
+      } else {
+        // Self-loop counts as a cycle (optional)
+        const n = comp[0];
+        if (edges.get(n)?.has(n)) inCycle.add(n);
+      }
+    }
+  }
+
+  for (let v = 0; v < count; v++) {
+    if (idx[v] === -1) strongConnect(v);
+  }
+
+  return inCycle;
+}
 /**
  *
  * @param {Triangle & { plane: Plane; boundingBox: BoundingBox }} a
@@ -292,6 +591,38 @@ function compareSideOfPlaneToCamera([a, b, c, d], triangle) {
     return -1; // Triangle is on far side of plane
   }
 }
+
+/*
+
+function compareSideOfPlaneToCamera([a, b, c, d], { p1, p2, p3 }) {
+  const centroidX = (p1.x + p2.x + p3.x) / 3;
+  const centroidY = (p1.y + p2.y + p3.y) / 3;
+  const centroidZ = (p1.z + p2.z + p3.z) / 3;
+
+  const side = a * centroidX + b * centroidY + c * centroidZ + d;
+  const sign = epsilonSign(side);
+
+  // All on plane (coplanar)
+  if (sign === 0) {
+    // console.warn("Coplanar");
+    return 0;
+  }
+
+  // The plane normal is (a, b, c).
+  // "Toward camera" in orthographic looking down +Z is the direction (0, 0, 1).
+  // The positive side of the plane is in the direction of the normal.
+  // If c > 0, positive side is toward +Z (camera).
+  // If c < 0, negative side is toward +Z (camera).
+  const cameraSideSign = Math.sign(c);
+
+  if (sign === cameraSideSign) {
+    return 1; // Triangle is on camera side of plane
+  } else {
+    return -1; // Triangle is on far side of plane
+  }
+}
+
+*/
 
 /**
  * @param {number} number
@@ -358,6 +689,12 @@ function boundsOverlap(a, b) {
  * @returns {Triangle[]}
  */
 function sortTriangles(triangles) {
+  triangles.sort(function (a, b) {
+    const boundingA = boundingBox(a);
+    const boundingB = boundingBox(b);
+
+    return boundingA.maxZ - boundingA.minZ - (boundingB.maxZ - boundingB.minZ);
+  });
   const boundingBoxes = triangles.map((t, index) => ({
     ...boundingBox(t),
     idx: index,
@@ -371,53 +708,57 @@ function sortTriangles(triangles) {
 
   const EPSILON = 1e-8;
 
+  const FACE_INDEX = 22;
+  const TUBE_INDEX = 18;
+
   for (let i = 0; i < triangles.length; i++) {
     const a = triangles[i];
     const aBoundingBox = boundingBoxes[i];
 
+    console.assert(a.p1.x !== 0.20781231050164017, i, a);
+
     for (let j = i + 1; j < triangles.length; j++) {
       const b = triangles[j];
+
       const bBoundingBox = boundingBoxes[j];
 
-      if (!boundsOverlap(aBoundingBox, bBoundingBox)) continue;
+      const shouldLog =
+        i === Math.min(FACE_INDEX, TUBE_INDEX) &&
+        j === Math.max(TUBE_INDEX, FACE_INDEX);
+      if (!boundsOverlap(aBoundingBox, bBoundingBox)) {
+        console.assert(!shouldLog, "bounds don't overlap");
 
-      const samples = overlappingPoints(a, aBoundingBox, b, bBoundingBox);
-      if (samples.length === 0) continue;
-
-      let aCloser = 0;
-      let bCloser = 0;
-
-      for (const p of samples) {
-        // Ensure p is truly in BOTH triangles (robustness)
-        if (!pointInTri2(p, b)) continue;
-        if (!pointInTri2(p, b)) continue;
-
-        const zA = depthAt(p, a);
-        const zB = depthAt(p, b);
-
-        // larger z is closer
-        if (zA > zB + EPSILON) aCloser++;
-        else if (zB > zA + EPSILON) bCloser++;
+        continue;
       }
 
-      // If consistent: add a hard ordering constraint.
-      if (aCloser > 0 && bCloser === 0) {
-        // A closer => draw B before A
+      const bSmaller = aBoundingBox.maxZ > bBoundingBox.maxZ;
+
+      console.assert(!shouldLog, bSmaller);
+
+      const side = compareSideOfPlaneToCamera(
+        getPlane(bSmaller ? a : b),
+        bSmaller ? b : a
+      );
+
+      console.assert(!shouldLog, side);
+
+      if (side < 0) {
         out[j].push(i);
         indeg[i]++;
-      } else if (bCloser > 0 && aCloser === 0) {
-        // B closer => draw A before B
+      } else if (side > 0) {
         out[i].push(j);
         indeg[j]++;
       } else {
-        console.log("ambiguous", aCloser, bCloser);
+        // console.log("ambiguous", side);
         // else ambiguous -> no edge; let fallback handle it stably
       }
     }
   }
 
+  console.log(indeg);
+
   const order = stableTopologicalSort(out, indeg, boundingBoxes);
-  return order.map((k) => triangles[k]);
+  return order.map((k) => triangles[k]).reverse();
 }
 
 /**
@@ -427,54 +768,50 @@ function sortTriangles(triangles) {
  */
 function stableTopologicalSort(out, incomingEdges, indexed) {
   const n = incomingEdges.length;
-  const ready = [];
-  for (let i = 0; i < n; i++) if (incomingEdges[i] === 0) ready.push(i);
+  // const ready = [];
+  // for (let i = 0; i < n; i++) if (incomingEdges[i] === 0) ready.push(i);
 
   // We want far first => smaller avgZ first
-  ready.sort(
-    (i, j) =>
-      indexed[i].centroid - indexed[j].centroid ||
-      indexed[i].idx - indexed[j].idx
-  );
+  // ready.sort(
+  //   (i, j) =>
+  //     indexed[i].centroid - indexed[j].centroid ||
+  //     indexed[i].idx - indexed[j].idx
+  // );
 
   const result = [];
   const inResult = new Array(n).fill(false);
 
-  let u;
-  while ((u = ready.shift())) {
-    result.push(u);
-    inResult[u] = true;
+  // let u;
+  // while ((u = ready.shift())) {
+  //   result.push(u);
+  //   inResult[u] = true;
 
-    for (const v of out[u]) {
-      incomingEdges[v]--;
-      if (incomingEdges[v] > 0) {
-        continue;
-      }
+  //   for (const v of out[u]) {
+  //     incomingEdges[v]--;
+  //     if (incomingEdges[v] > 0) {
+  //       continue;
+  //     }
 
-      // Insert v into ready maintaining the same ordering
-      const keyZ = indexed[v].centroid;
-      const keyIdx = indexed[v].idx;
-      let k = 0;
-      while (
-        k < ready.length &&
-        (indexed[ready[k]].centroid < keyZ ||
-          (indexed[ready[k]].centroid === keyZ &&
-            indexed[ready[k]].idx < keyIdx))
-      )
-        k++;
-      ready.splice(k, 0, v);
-    }
-  }
+  //     // Insert v into ready maintaining the same ordering
+  //     const keyZ = indexed[v].centroid;
+  //     const keyIdx = indexed[v].idx;
+  //     let k = 0;
+  //     while (
+  //       k < ready.length &&
+  //       (indexed[ready[k]].centroid < keyZ ||
+  //         (indexed[ready[k]].centroid === keyZ &&
+  //           indexed[ready[k]].idx < keyIdx))
+  //     )
+  //       k++;
+  //     ready.splice(k, 0, v);
+  //   }
+  // }
 
   // Cycle fallback: append remaining in far-first order.
   if (result.length !== n) {
     const remaining = [];
     for (let i = 0; i < n; i++) if (!inResult[i]) remaining.push(i);
-    remaining.sort(
-      (i, j) =>
-        indexed[i].centroid - indexed[j].centroid ||
-        indexed[i].idx - indexed[j].idx
-    );
+    remaining.sort((i, j) => incomingEdges[i] - incomingEdges[j]);
     result.push(...remaining);
   }
 
