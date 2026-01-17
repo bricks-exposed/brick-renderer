@@ -16,9 +16,9 @@ export class Transformation {
    */
   constructor(
     defaultTransformation = {
-      rotateX: 80,
+      rotateX: 60,
       rotateY: 0,
-      rotateZ: 30,
+      rotateZ: 50,
       scale: 0.8,
     }
   ) {

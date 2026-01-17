@@ -2,6 +2,8 @@
 import * as matrix from "./matrix.js";
 
 export class MultiPartDocument {
+  static #FILE_COMMAND = /^\s*0\s+FILE\s+/m;
+
   /**
    * @param {string} mainFileName
    * @param {string | {files: Map<string, ParsedFile>; subFilesToLoad: Set<string> }} contents
@@ -82,9 +84,9 @@ export class MultiPartDocument {
    * }}
    */
   static parse(fileName, contents) {
-    const FILE_COMMAND = /^\s*0\s+FILE\s+/m;
-
-    let [initial, mainFileContents, ...blocks] = contents.split(FILE_COMMAND);
+    let [initial, mainFileContents, ...blocks] = contents.split(
+      this.#FILE_COMMAND
+    );
 
     // Single file, not mpd
     if (!mainFileContents) {
@@ -175,6 +177,8 @@ export class File {
     );
   }
 
+  static #BFC_INVERTNEXT = /^0\s+BFC\s+INVERTNEXT/;
+
   /**
    * @param {string} fileName
    * @param {string} contents
@@ -183,8 +187,6 @@ export class File {
    */
   static parse(fileName, contents) {
     const colors = [];
-
-    const BFC_INVERTNEXT = /^0\s+BFC\s+INVERTNEXT/;
 
     let invertNext = false;
 
@@ -210,7 +212,7 @@ export class File {
       }
 
       let parsed;
-      if (BFC_INVERTNEXT.test(command)) {
+      if (File.#BFC_INVERTNEXT.test(command)) {
         invertNext = true;
       } else if ((parsed = Color.from(command))) {
         colors.push(parsed);
@@ -463,6 +465,8 @@ const LineType = Object.freeze({
   DrawOptionalLine: 5,
 });
 
+const FILENAME = /^(\S+\s+){14}(?<fileName>.*)/;
+
 /**
  * @param {string} command
  * @param {boolean} parentInvert
@@ -471,7 +475,7 @@ const LineType = Object.freeze({
  * @returns {boolean}
  */
 function parseDrawFile(command, parentInvert, geometry) {
-  const [type, unparsedColor, ...tokens] = command.split(/\s+/);
+  const [type, unparsedColor, ...tokens] = command.split(WHITESPACE);
 
   if (type !== LineType.DrawFile.toString()) {
     return false;
@@ -479,8 +483,7 @@ function parseDrawFile(command, parentInvert, geometry) {
 
   const color = Number(unparsedColor);
 
-  const fileName = command.match(/^(\S+\s+){14}(?<fileName>.*)/)?.groups
-    ?.fileName;
+  const fileName = command.match(FILENAME)?.groups?.fileName;
 
   if (!fileName) {
     throw new Error(
@@ -507,21 +510,23 @@ function parseDrawFile(command, parentInvert, geometry) {
     invert: parentInvert !== invert,
   };
 
-  if (fileName === "stud.dat") {
-    geometry.studs.push(args);
-  } else {
-    geometry.files.push(args);
-  }
+  // if (fileName === "stud.dat") {
+  //   geometry.studs.push(args);
+  // } else {
+  geometry.files.push(args);
+  // }
 
   return true;
 }
+
+const WHITESPACE = /\s+/;
 
 /**
  * @param {string} command
  * @param {Geometry} geometry
  */
 function parseGeometry(command, geometry) {
-  const tokens = command.split(/\s+/);
+  const tokens = command.split(WHITESPACE);
 
   const type = Number(tokens[0]);
 
@@ -531,7 +536,7 @@ function parseGeometry(command, geometry) {
     return false;
   }
 
-  const [_type, color, ...points] = command.split(/\s+/).map(Number.parseFloat);
+  const [_type, color, ...points] = tokens.map(Number.parseFloat);
 
   /** @type {Coordinate[]} */
   let coordinates = [];
@@ -694,7 +699,7 @@ export class Color {
       _EDGE,
       edge,
       ...optional
-    ] = command.split(/\s+/);
+    ] = command.split(WHITESPACE);
 
     if (type !== "0" || metaCommand !== "!COLOUR") {
       return undefined;
