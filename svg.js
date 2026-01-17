@@ -3,7 +3,6 @@ import { Model } from "./model.js";
 import { Color } from "./ldraw.js";
 import { Transformation } from "./transformation.js";
 import { orbitControls } from "./orbit.js";
-import { sortWithBSP } from "./triangle-sort.js";
 
 const worker = new Worker(new URL("part-worker.js", import.meta.url), {
   type: "module",
@@ -45,32 +44,21 @@ function render(svg, model, transformation) {
   const [a, b, c, , d, e, f, , g, h, ii, , tx, ty, tz] =
     model.matrix(transformation);
 
-  /** @type {[string, [number, number]][]} */
-  const lines = [];
-  for (let i = 0; i < model.geometry.lines.length; i += 2 * 4) {
-    const x1 = model.geometry.lines[i];
-    const y1 = model.geometry.lines[i + 1];
-    const z1 = model.geometry.lines[i + 2];
-    const x2 = model.geometry.lines[i + 4];
-    const y2 = model.geometry.lines[i + 5];
-    const z2 = model.geometry.lines[i + 6];
-
-    const mappedX1 = a * x1 + d * y1 + g * z1 + tx;
-    const mappedY1 = b * x1 + e * y1 + h * z1 + ty;
-    const mappedZ1 = c * x1 + f * y1 + ii * z1 + tz;
-
-    const mappedX2 = a * x2 + d * y2 + g * z2 + tx;
-    const mappedY2 = b * x2 + e * y2 + h * z2 + ty;
-    const mappedZ2 = c * x2 + f * y2 + ii * z2 + tz;
-
-    const minZ = Math.min(mappedZ1, mappedZ2);
-    const maxZ = Math.max(mappedZ1, mappedZ2);
-
-    lines.push([
-      `<line x1="${mappedX1}" y1="${-mappedY1}" x2="${mappedX2}" y2="${-mappedY2}" stroke="black" stroke-width="0.1" stroke-linecap="round" data-maxZ="${minZ}" />`,
-      [minZ, maxZ],
-    ]);
-  }
+  const lines = getLines(
+    model.geometry.lines,
+    a,
+    b,
+    c,
+    d,
+    e,
+    f,
+    g,
+    h,
+    ii,
+    tx,
+    ty,
+    tz
+  );
 
   const triangles = getTriangles(
     model.geometry.triangles,
@@ -87,23 +75,30 @@ function render(svg, model, transformation) {
     ty,
     tz
   );
+  console.log(triangles.length, lines.length);
 
-  const contents = [...sortWithBSP(triangles)]
-    .map(
-      (t) =>
-        `<polygon points="${t.p1.x}, ${t.p1.y} ${t.p2.x}, ${t.p2.y} ${
-          t.p3.x
-        }, ${t.p3.y}" fill="rgba(${244 * Math.random()} ${
-          244 * Math.random()
-        } ${
-          244 * Math.random()
-        })" stroke="green" stroke-width="0.0" stroke-linejoin="round" data-triangle="${JSON.stringify(
-          t
-        )}" />`
-    )
-    .join("");
+  const contents = [...sortTriangles(triangles)].map(draw);
+  console.log(contents.length);
 
-  svg.innerHTML = contents;
+  svg.innerHTML = contents.join("");
+}
+
+/**
+ *
+ * @param {Triangle | Line} geometry
+ */
+function draw(geometry) {
+  const { p1, p2 } = geometry;
+  if ("p3" in geometry) {
+    const p3 = geometry.p3;
+    return `<polygon points="${p1.x}, ${p1.y} ${p2.x}, ${p2.y} ${p3.x}, ${
+      p3.y
+    }" fill="rgba(${
+      244 * Math.random()
+    } 72 72)" stroke="green" stroke-width="0.0" stroke-linejoin="round"" />`;
+  } else {
+    return `<line x1="${p1.x}" y1="${p1.y}" x2="${p2.x}" y2="${p2.y}" stroke="black" stroke-width="0.01" stroke-linecap="round" />`;
+  }
 }
 
 /**
@@ -415,6 +410,7 @@ function sortTriangles(triangles) {
         out[i].push(j);
         indeg[j]++;
       } else {
+        console.log("ambiguous", aCloser, bCloser);
         // else ambiguous -> no edge; let fallback handle it stably
       }
     }
@@ -575,52 +571,52 @@ function overlappingPoints(A, aBounds, B, bBounds) {
       if (ip) pts.push(ip);
     }
   }
-  const ox1 = Math.max(aBounds.minX, bBounds.minX);
-  const ox2 = Math.min(aBounds.maxX, bBounds.maxX);
-  const oy1 = Math.max(aBounds.minY, bBounds.minY);
-  const oy2 = Math.min(aBounds.maxY, bBounds.maxY);
+  // const ox1 = Math.max(aBounds.minX, bBounds.minX);
+  // const ox2 = Math.min(aBounds.maxX, bBounds.maxX);
+  // const oy1 = Math.max(aBounds.minY, bBounds.minY);
+  // const oy2 = Math.min(aBounds.maxY, bBounds.maxY);
 
-  const w = ox2 - ox1;
-  const h = oy2 - oy1;
+  // const w = ox2 - ox1;
+  // const h = oy2 - oy1;
 
-  if (w > 0 && h > 0) {
-    const cx = (ox1 + ox2) / 2;
-    const cy = (oy1 + oy2) / 2;
+  // if (w > 0 && h > 0) {
+  //   const cx = (ox1 + ox2) / 2;
+  //   const cy = (oy1 + oy2) / 2;
 
-    // 3x3-ish, but only 5 points (fast) — enough to catch slivers
-    const candidates = [
-      { x: cx, y: cy },
-      { x: cx - w * 0.25, y: cy },
-      { x: cx + w * 0.25, y: cy },
-      { x: cx, y: cy - h * 0.25 },
-      { x: cx, y: cy + h * 0.25 },
-    ];
+  //   // 3x3-ish, but only 5 points (fast) — enough to catch slivers
+  //   const candidates = [
+  //     { x: cx, y: cy },
+  //     { x: cx - w * 0.25, y: cy },
+  //     { x: cx + w * 0.25, y: cy },
+  //     { x: cx, y: cy - h * 0.25 },
+  //     { x: cx, y: cy + h * 0.25 },
+  //   ];
 
-    for (const p of candidates) {
-      if (pointInTri2(p, A) && pointInTri2(p, B)) {
-        pts.push(p);
-      }
-    }
+  //   for (const p of candidates) {
+  //     if (pointInTri2(p, A) && pointInTri2(p, B)) {
+  //       pts.push(p);
+  //     }
+  //   }
 
-    // If overlap is extremely thin, w or h might be tiny; add a fixed nudge set.
-    const N = 1e-3; // screen units; tweak if your coordinates are huge/small
-    const nudges = [
-      { x: cx + N, y: cy },
-      { x: cx - N, y: cy },
-      { x: cx, y: cy + N },
-      { x: cx, y: cy - N },
-      { x: cx + N, y: cy + N },
-      { x: cx - N, y: cy + N },
-      { x: cx + N, y: cy - N },
-      { x: cx - N, y: cy - N },
-    ];
-    for (const p of nudges) {
-      if (pointInTri2(p, A) && pointInTri2(p, B)) {
-        pts.push(p);
-      }
-    }
-    return uniquePoints([...pts, ...nudges], 1e-6);
-  }
+  //   // If overlap is extremely thin, w or h might be tiny; add a fixed nudge set.
+  //   const N = 1e-3; // screen units; tweak if your coordinates are huge/small
+  //   const nudges = [
+  //     { x: cx + N, y: cy },
+  //     { x: cx - N, y: cy },
+  //     { x: cx, y: cy + N },
+  //     { x: cx, y: cy - N },
+  //     { x: cx + N, y: cy + N },
+  //     { x: cx - N, y: cy + N },
+  //     { x: cx + N, y: cy - N },
+  //     { x: cx - N, y: cy - N },
+  //   ];
+  //   for (const p of nudges) {
+  //     if (pointInTri2(p, A) && pointInTri2(p, B)) {
+  //       pts.push(p);
+  //     }
+  //   }
+  //   return uniquePoints([...pts, ...nudges], 1e-6);
+  // }
 
   return uniquePoints(pts, 1e-6);
 }
@@ -685,6 +681,10 @@ function cross2(a, b) {
 }
 
 /**
+ * @typedef {{ p1: Vertex; p2: Vertex; colorCode: number }} Line
+ */
+
+/**
  *
  * @param {Triangle} triangle
  */
@@ -699,6 +699,68 @@ function isFrontFacing(triangle) {
   const crossProductZ = (bx - ax) * (cy - ay) - (by - ay) * (cx - ax);
 
   return crossProductZ < 0;
+}
+
+/**
+ * @param {number[] | Float32Array} lineData
+ * @param {number} a
+ * @param {number} b
+ * @param {number} c
+ * @param {number} d
+ * @param {number} e
+ * @param {number} f
+ * @param {number} g
+ * @param {number} h
+ * @param {number} ii
+ * @param {number} tx
+ * @param {number} ty
+ * @param {number} tz
+ *
+ * @returns {Line[]}
+ */
+function getLines(lineData, a, b, c, d, e, f, g, h, ii, tx, ty, tz) {
+  const lines = [];
+  for (let i = 0; i < lineData.length; i += 2 * 4) {
+    const points = [];
+    let colorCode = 16;
+
+    for (let j = 0; j < 12; j += 4) {
+      const x = lineData[i + j];
+      const y = lineData[i + j + 1];
+      const z = lineData[i + j + 2];
+      colorCode = lineData[i + j + 3];
+
+      const point = transformPoint(
+        x,
+        y,
+        z,
+        a,
+        b,
+        c,
+        d,
+        e,
+        f,
+        g,
+        h,
+        ii,
+        tx,
+        ty,
+        tz
+      );
+
+      points.push(point);
+    }
+
+    const line = {
+      p1: points[0],
+      p2: points[1],
+      colorCode,
+    };
+
+    lines.push(line);
+  }
+
+  return lines;
 }
 
 /**

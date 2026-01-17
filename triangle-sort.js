@@ -1,74 +1,72 @@
 /**
+ * Triangle sorting for LDraw SVG rendering
+ * Conservative version - limits splitting to avoid triangle explosion
+ */
+
+const EPSILON = 1e-8;
+
+/**
  * @typedef {{ x: number; y: number; z: number }} Vertex
  * @typedef {{ p1: Vertex; p2: Vertex; p3: Vertex; colorCode: number }} Triangle
- *
- * @typedef {{
- *   minX: number;
- *   minY: number;
- *   maxX: number;
- *   maxY: number;
- *   minZ: number;
- *   maxZ: number;
- *   centroid: number;
- * }} BoundingBox
- *
- * @typedef {Triangle & {
- *   boundingBox: BoundingBox;
- *   plane: Plane;
- * }} TriangleData
- *
- * @typedef {{ x: number; y: number }} Point2
  * @typedef {[number, number, number, number]} Plane
  */
 
-const EPSILON = 1e-10;
+// ============================================================
+// Core geometry functions
+// ============================================================
 
-/**
- * Sort triangles using BSP tree (handles all cases, no cycles)
- * @param {Triangle[]} triangles
- * @returns {Triangle[]}
- */
-export function sortWithBSP(triangles) {
-  const bsp = buildBSP(triangles);
+function getPlane({ p1, p2, p3 }) {
+  const ax = p2.x - p1.x,
+    ay = p2.y - p1.y,
+    az = p2.z - p1.z;
+  const bx = p3.x - p1.x,
+    by = p3.y - p1.y,
+    bz = p3.z - p1.z;
 
-  /** @type {Triangle[]} */
-  const result = [];
-  traverseBSPBackToFront(bsp, result);
+  const a = ay * bz - az * by;
+  const b = az * bx - ax * bz;
+  const c = ax * by - ay * bx;
+  const len = Math.sqrt(a * a + b * b + c * c);
 
-  return result;
+  if (len < EPSILON) return [0, 0, 1, 0];
+
+  const na = a / len,
+    nb = b / len,
+    nc = c / len;
+  return [na, nb, nc, -(na * p1.x + nb * p1.y + nc * p1.z)];
 }
 
-/**
- * Classify a point relative to a plane
- * @param {Plane} plane
- * @param {Vertex} point
- * @returns {number} 1 = front (positive), -1 = back (negative), 0 = on plane
- */
-function classifyPoint(plane, point) {
-  const [a, b, c, d] = plane;
-  const distance = a * point.x + b * point.y + c * point.z + d;
-  if (distance > EPSILON) return 1;
-  if (distance < -EPSILON) return -1;
+function classifyPoint([a, b, c, d], point) {
+  const dist = a * point.x + b * point.y + c * point.z + d;
+  if (dist > EPSILON) return 1;
+  if (dist < -EPSILON) return -1;
   return 0;
 }
 
-/**
- * Compute intersection point of an edge with a plane
- * @param {Plane} plane
- * @param {Vertex} p1 - Start point
- * @param {Vertex} p2 - End point
- * @returns {Vertex}
- */
-function planeEdgeIntersection(plane, p1, p2) {
-  const [a, b, c, d] = plane;
+function classifyTriangle(plane, tri) {
+  const c1 = classifyPoint(plane, tri.p1);
+  const c2 = classifyPoint(plane, tri.p2);
+  const c3 = classifyPoint(plane, tri.p3);
 
-  // Distance from each point to the plane
+  const pos = (c1 === 1) + (c2 === 1) + (c3 === 1);
+  const neg = (c1 === -1) + (c2 === -1) + (c3 === -1);
+
+  if (pos > 0 && neg > 0) return { side: 0, straddles: true };
+  if (pos > 0) return { side: 1, straddles: false };
+  if (neg > 0) return { side: -1, straddles: false };
+  return { side: 0, straddles: false };
+}
+
+function linePlaneIntersection([a, b, c, d], p1, p2) {
   const d1 = a * p1.x + b * p1.y + c * p1.z + d;
   const d2 = a * p2.x + b * p2.y + c * p2.z + d;
+  const denom = d1 - d2;
 
-  // Parameter t where the line crosses the plane
-  const t = d1 / (d1 - d2);
+  if (Math.abs(denom) < EPSILON) {
+    return { x: (p1.x + p2.x) / 2, y: (p1.y + p2.y) / 2, z: (p1.z + p2.z) / 2 };
+  }
 
+  const t = d1 / denom;
   return {
     x: p1.x + t * (p2.x - p1.x),
     y: p1.y + t * (p2.y - p1.y),
@@ -76,219 +74,219 @@ function planeEdgeIntersection(plane, p1, p2) {
   };
 }
 
-/**
- * Split a triangle by a plane
- * @param {Triangle} triangle
- * @param {Plane} plane
- * @returns {{ front: Triangle[]; back: Triangle[]; onPlane: Triangle[] }}
- */
-function splitTriangle(triangle, plane) {
-  const { p1, p2, p3, colorCode } = triangle;
-
-  const c1 = classifyPoint(plane, p1);
-  const c2 = classifyPoint(plane, p2);
-  const c3 = classifyPoint(plane, p3);
-
+function splitTriangle(tri, plane) {
   const points = [
-    { vertex: p1, classification: c1 },
-    { vertex: p2, classification: c2 },
-    { vertex: p3, classification: c3 },
+    { v: tri.p1, c: classifyPoint(plane, tri.p1) },
+    { v: tri.p2, c: classifyPoint(plane, tri.p2) },
+    { v: tri.p3, c: classifyPoint(plane, tri.p3) },
   ];
 
-  const frontCount = points.filter((p) => p.classification === 1).length;
-  const backCount = points.filter((p) => p.classification === -1).length;
-  const onCount = points.filter((p) => p.classification === 0).length;
-
-  // All on one side or on the plane
-  if (backCount === 0 && onCount < 3) {
-    return { front: [triangle], back: [], onPlane: [] };
-  }
-  if (frontCount === 0 && onCount < 3) {
-    return { front: [], back: [triangle], onPlane: [] };
-  }
-  if (onCount === 3) {
-    return { front: [], back: [], onPlane: [triangle] };
-  }
-
-  // Triangle straddles the plane - need to split
-  const frontVerts = [];
-  const backVerts = [];
+  const front = [],
+    back = [];
 
   for (let i = 0; i < 3; i++) {
-    const current = points[i];
+    const curr = points[i];
     const next = points[(i + 1) % 3];
 
-    // Add current vertex to appropriate list(s)
-    if (current.classification === 1) {
-      frontVerts.push(current.vertex);
-    } else if (current.classification === -1) {
-      backVerts.push(current.vertex);
-    } else {
-      // On the plane - add to both
-      frontVerts.push(current.vertex);
-      backVerts.push(current.vertex);
-    }
+    if (curr.c >= 0) front.push(curr.v);
+    if (curr.c <= 0) back.push(curr.v);
 
-    // Check if edge crosses the plane
-    if (
-      (current.classification === 1 && next.classification === -1) ||
-      (current.classification === -1 && next.classification === 1)
-    ) {
-      const intersection = planeEdgeIntersection(
-        plane,
-        current.vertex,
-        next.vertex
-      );
-      frontVerts.push(intersection);
-      backVerts.push(intersection);
+    if ((curr.c === 1 && next.c === -1) || (curr.c === -1 && next.c === 1)) {
+      const inter = linePlaneIntersection(plane, curr.v, next.v);
+      front.push(inter);
+      back.push(inter);
     }
   }
-
-  // Convert vertex lists to triangles (triangulate if more than 3 vertices)
-  const front = triangulatePolygon(frontVerts, colorCode);
-  const back = triangulatePolygon(backVerts, colorCode);
-
-  return { front, back, onPlane: [] };
-}
-
-/**
- * Convert a convex polygon (3-4 vertices) into triangles
- * @param {Vertex[]} vertices
- * @param {number} colorCode
- * @returns {Triangle[]}
- */
-function triangulatePolygon(vertices, colorCode) {
-  if (vertices.length < 3) return [];
-
-  const triangles = [];
-
-  // Fan triangulation from first vertex
-  for (let i = 1; i < vertices.length - 1; i++) {
-    triangles.push({
-      p1: vertices[0],
-      p2: vertices[i],
-      p3: vertices[i + 1],
-      colorCode,
-    });
-  }
-
-  return triangles;
-}
-
-/**
- * Get the plane equation for a triangle
- * @param {Triangle} triangle
- * @returns {Plane}
- */
-function getPlane({ p1, p2, p3 }) {
-  const a = (p2.y - p1.y) * (p3.z - p1.z) - (p2.z - p1.z) * (p3.y - p1.y);
-  const b = (p2.z - p1.z) * (p3.x - p1.x) - (p2.x - p1.x) * (p3.z - p1.z);
-  const c = (p2.x - p1.x) * (p3.y - p1.y) - (p2.y - p1.y) * (p3.x - p1.x);
-  const d = -(a * p1.x + b * p1.y + c * p1.z);
-
-  // Normalize the plane equation for consistent comparisons
-  const len = Math.sqrt(a * a + b * b + c * c);
-  if (len < EPSILON) {
-    // Degenerate triangle
-    return [0, 0, 1, 0];
-  }
-
-  return [a / len, b / len, c / len, d / len];
-}
-
-/**
- * Compute bounding box for a triangle
- * @param {Triangle} triangle
- * @returns {BoundingBox}
- */
-function boundingBox(triangle) {
-  const minX = Math.min(triangle.p1.x, triangle.p2.x, triangle.p3.x);
-  const maxX = Math.max(triangle.p1.x, triangle.p2.x, triangle.p3.x);
-  const minY = Math.min(triangle.p1.y, triangle.p2.y, triangle.p3.y);
-  const maxY = Math.max(triangle.p1.y, triangle.p2.y, triangle.p3.y);
-  const minZ = Math.min(triangle.p1.z, triangle.p2.z, triangle.p3.z);
-  const maxZ = Math.max(triangle.p1.z, triangle.p2.z, triangle.p3.z);
-  const centroid = (triangle.p1.z + triangle.p2.z + triangle.p3.z) / 3;
-
-  return { minX, maxX, minY, maxY, minZ, maxZ, centroid };
-}
-
-/**
- * Check if two bounding boxes overlap in X and Y
- * @param {BoundingBox} a
- * @param {BoundingBox} b
- */
-function boundsOverlap(a, b) {
-  return !(
-    a.maxX < b.minX ||
-    b.maxX < a.minX ||
-    a.maxY < b.minY ||
-    b.maxY < a.minY
-  );
-}
-
-/**
- * BSP Tree Node
- * @typedef {{
- *   plane: Plane;
- *   triangles: Triangle[];
- *   front: BSPNode | null;
- *   back: BSPNode | null;
- * }} BSPNode
- */
-
-/**
- * Build a BSP tree from triangles
- * @param {Triangle[]} triangles
- * @returns {BSPNode | null}
- */
-function buildBSP(triangles) {
-  if (triangles.length === 0) return null;
-
-  // Choose a splitting plane - use the first triangle's plane
-  // (More sophisticated heuristics exist but this works for most cases)
-  const splitter = triangles[0];
-  const plane = getPlane(splitter);
-
-  /** @type {Triangle[]} */
-  const nodeTriangles = [];
-  /** @type {Triangle[]} */
-  const frontList = [];
-  /** @type {Triangle[]} */
-  const backList = [];
-
-  for (const tri of triangles) {
-    const { front, back, onPlane } = splitTriangle(tri, plane);
-
-    nodeTriangles.push(...onPlane);
-    frontList.push(...front);
-    backList.push(...back);
-  }
-
-  // The splitter itself should be in nodeTriangles, but splitTriangle
-  // might have put it in front. Let's handle this more carefully.
-  // Actually, the splitter will be classified as "onPlane" since all its
-  // vertices are on its own plane.
 
   return {
-    plane,
-    triangles: nodeTriangles,
-    front: buildBSP(frontList),
-    back: buildBSP(backList),
+    front: triangulate(front, tri.colorCode),
+    back: triangulate(back, tri.colorCode),
   };
 }
 
-/**
- * Traverse BSP tree in back-to-front order for a camera looking down +Z
- * @param {BSPNode | null} node
- * @param {Triangle[]} result
- */
-function traverseBSPBackToFront(node, result) {
-  if (!node) return;
+function triangulate(verts, colorCode) {
+  if (verts.length < 3) return [];
+  const tris = [];
+  for (let i = 1; i < verts.length - 1; i++) {
+    tris.push({ p1: verts[0], p2: verts[i], p3: verts[i + 1], colorCode });
+  }
+  return tris;
+}
 
-  // Camera is on the back (negative) side
-  // Draw front first, then node, then back
-  traverseBSPBackToFront(node.front, result);
-  result.push(...node.triangles);
-  traverseBSPBackToFront(node.back, result);
+/**
+ * @param {Triangle} triangle
+ */
+function centroidZ({ p1, p2, p3 }) {
+  return (p1.z + p2.z + p3.z) / 3;
+}
+
+/**
+ * @param {Triangle[]} triangles
+ */
+function sortByZ(triangles) {
+  return [...triangles].sort((a, b) => centroidZ(a) - centroidZ(b));
+}
+
+// ============================================================
+// Option 1: Simple Z-sort (no splitting, fastest)
+// ============================================================
+
+// ============================================================
+// Option 2: Limited BSP (caps triangle growth)
+// ============================================================
+
+class BSPNode {
+  constructor() {
+    this.plane = null;
+    this.triangles = [];
+    this.front = null;
+    this.back = null;
+  }
+}
+
+function scorePlane(plane, triangles) {
+  let front = 0,
+    back = 0,
+    split = 0;
+
+  for (const tri of triangles) {
+    const { side, straddles } = classifyTriangle(plane, tri);
+    if (straddles) split++;
+    else if (side > 0) front++;
+    else back++;
+  }
+
+  return { front, back, split, score: split * 10 + Math.abs(front - back) };
+}
+
+/**
+ * BSP with strict limits on splitting
+ * @param {Triangle[]} triangles
+ * @param {number} maxTriangles - Stop splitting if we'd exceed this
+ * @param {number} maxGrowthRatio - Stop if triangles would grow by more than this ratio
+ */
+function sortLimitedBSP(
+  triangles,
+  maxTriangles = Infinity,
+  maxGrowthRatio = 1.5
+) {
+  const originalCount = triangles.length;
+  const maxAllowed = Math.min(
+    maxTriangles,
+    Math.floor(originalCount * maxGrowthRatio)
+  );
+
+  let currentCount = originalCount;
+
+  function buildBSP(tris, depth) {
+    if (tris.length === 0) return null;
+
+    const node = new BSPNode();
+
+    // Stop conditions
+    if (tris.length <= 3 || depth > 30) {
+      node.triangles = sortByZ(tris);
+      return node;
+    }
+
+    // Find best splitting plane (sample fewer for speed)
+    let bestPlane = null;
+    let bestScore = Infinity;
+    let bestSplit = Infinity;
+
+    const step = Math.max(1, Math.floor(tris.length / 10));
+    for (let i = 0; i < tris.length; i += step) {
+      const plane = getPlane(tris[i]);
+      if (Math.abs(plane[2]) < 0.1) continue;
+
+      const { score, split } = scorePlane(plane, tris);
+      if (score < bestScore) {
+        bestScore = score;
+        bestSplit = split;
+        bestPlane = plane;
+      }
+    }
+
+    // Check if splitting would exceed our limit
+    const projectedCount = currentCount + bestSplit; // Each split adds ~1 triangle
+    if (
+      !bestPlane ||
+      projectedCount > maxAllowed ||
+      bestSplit > tris.length * 0.3
+    ) {
+      // Too many splits - just Z-sort this group
+      node.triangles = sortByZ(tris);
+      return node;
+    }
+
+    currentCount += bestSplit;
+    node.plane = bestPlane;
+
+    const frontList = [],
+      backList = [];
+
+    for (const tri of tris) {
+      const { side, straddles } = classifyTriangle(bestPlane, tri);
+
+      if (straddles) {
+        const { front, back } = splitTriangle(tri, bestPlane);
+        frontList.push(...front);
+        backList.push(...back);
+      } else if (side > 0) {
+        frontList.push(tri);
+      } else if (side < 0) {
+        backList.push(tri);
+      } else {
+        node.triangles.push(tri);
+      }
+    }
+
+    node.triangles = sortByZ(node.triangles);
+    node.front = buildBSP(frontList, depth + 1);
+    node.back = buildBSP(backList, depth + 1);
+
+    return node;
+  }
+
+  function traverse(node, result) {
+    if (!node) return;
+    if (!node.plane) {
+      result.push(...node.triangles);
+      return;
+    }
+
+    if (node.plane[2] > 0) {
+      traverse(node.back, result);
+      result.push(...node.triangles);
+      traverse(node.front, result);
+    } else {
+      traverse(node.front, result);
+      result.push(...node.triangles);
+      traverse(node.back, result);
+    }
+  }
+
+  const bsp = buildBSP(triangles, 0);
+  const result = [];
+  traverse(bsp, result);
+  return result;
+}
+
+// ============================================================
+// Main export - choose your strategy
+// ============================================================
+
+/**
+ * Sort triangles for painter's algorithm
+ *
+ * @param {Triangle[]} triangles
+ * @param {Object} options
+ * @param {'simple' | 'topological' | 'bsp'} options.method - Sorting method
+ * @param {number} options.maxGrowthRatio - For BSP: max triangle growth (default 1.3)
+ */
+export function sort(
+  triangles,
+  { method, maxGrowthRatio } = { method: "topological", maxGrowthRatio: 1.3 }
+) {
+  return sortLimitedBSP(triangles, Infinity, maxGrowthRatio);
 }
