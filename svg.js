@@ -5,7 +5,7 @@ import { Model } from "./model.js";
 import { Color } from "./ldraw.js";
 import { Transformation } from "./transformation.js";
 import { orbitControls } from "./orbit.js";
-import { isFrontFacing, depthSortTriangles } from "./triangles.js";
+import { isFrontFacing, depthSortTrianglesAndLines } from "./triangles.js";
 
 const worker = new Worker(new URL("part-worker.js", import.meta.url), {
   type: "module",
@@ -52,8 +52,8 @@ function render(svg, model, transformation) {
 
   const triangles = getTriangles(model.geometry.triangles, transformer);
 
-  const contents = [...depthSortTriangles(triangles)].map((g) =>
-    draw(g, model.color)
+  const contents = depthSortTrianglesAndLines([...triangles, ...lines]).map(
+    ([g, i]) => draw(g, model.color, i)
   );
 
   svg.innerHTML = contents.join("");
@@ -62,8 +62,9 @@ function render(svg, model, transformation) {
 /**
  * @param {TriangleData | LineData} geometry
  * @param {Color} defaultColor
+ * @param {number} i
  */
-function draw(geometry, defaultColor) {
+function draw(geometry, defaultColor, i) {
   const { p1, p2 } = geometry;
 
   const color =
@@ -74,9 +75,15 @@ function draw(geometry, defaultColor) {
 
   if ("p3" in geometry) {
     const p3 = geometry.p3;
-    return `<polygon points="${p1[0]}, ${p1[1]} ${p2[0]}, ${p2[1]} ${p3[0]}, ${p3[1]}" fill="rgba(${r} ${g} ${b} / ${a})" stroke="green" stroke-width="0.0" stroke-linejoin="round" />`;
+    return `<polygon points="${p1[0]}, ${p1[1]} ${p2[0]}, ${p2[1]} ${p3[0]}, ${p3[1]}" fill="rgba(${r} ${g} ${b} / ${a})" stroke="rgba(${r} ${g} ${b} / ${a})" stroke-width="0.02" stroke-linejoin="bevel" data-i="${i}" />`;
   } else {
-    return `<line x1="${p1[0]}" y1="${p1[1]}" x2="${p2[0]}" y2="${p2[1]}" stroke="black" stroke-width="0.01" stroke-linecap="round" />`;
+    return `<line x1="${p1[0]}" y1="${p1[1]}" x2="${p2[0]}" y2="${
+      p2[1]
+    }" stroke="${
+      geometry.colorCode === 16 ? "black" : "yellow"
+    }" stroke-width="0.02" stroke-linecap="round" data-color="${
+      geometry.colorCode
+    }" data-i="${i}" />`;
   }
 }
 
@@ -97,7 +104,7 @@ function getLines(lineData, transformer) {
     const points = [];
     let colorCode = 16;
 
-    for (let j = 0; j < 12; j += 4) {
+    for (let j = 0; j < 8; j += 4) {
       const x = lineData[i + j];
       const y = lineData[i + j + 1];
       const z = lineData[i + j + 2];
