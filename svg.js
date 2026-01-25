@@ -48,7 +48,11 @@ function render(svg, model, transformation) {
 
   const transformer = transformPoint.bind(null, matrix);
 
-  const lines = getLines(model.geometry.lines, transformer);
+  const lines = getLines(
+    model.geometry.lines,
+    model.geometry.optionalLines,
+    transformer
+  );
 
   const triangles = getTriangles(model.geometry.triangles, transformer);
 
@@ -75,13 +79,21 @@ function draw(geometry, defaultColor, i) {
 
   if ("p3" in geometry) {
     const p3 = geometry.p3;
-    return `<polygon points="${p1[0]}, ${p1[1]} ${p2[0]}, ${p2[1]} ${p3[0]}, ${p3[1]}" fill="rgba(${r} ${g} ${b} / ${a})" stroke="rgba(${r} ${g} ${b} / ${a})" stroke-width="0.02" stroke-linejoin="bevel" data-i="${i}" />`;
+    return `
+    <polygon
+      points="${p1[0]}, ${p1[1]} ${p2[0]}, ${p2[1]} ${p3[0]}, ${p3[1]}"
+      fill="rgba(${r} ${g} ${b} / ${a})"
+      stroke="rgba(${r} ${g} ${b} / ${a})"
+      stroke-width="0.01"
+      stroke-linejoin="bevel"
+      data-i="${i}"
+    />`;
   } else {
     return `<line x1="${p1[0]}" y1="${p1[1]}" x2="${p2[0]}" y2="${
       p2[1]
     }" stroke="${
       geometry.colorCode === 16 ? "black" : "yellow"
-    }" stroke-width="0.02" stroke-linecap="round" data-color="${
+    }" stroke-width="0.01" stroke-linecap="round" data-color="${
       geometry.colorCode
     }" data-i="${i}" />`;
   }
@@ -94,11 +106,12 @@ function draw(geometry, defaultColor, i) {
 
 /**
  * @param {number[] | Float32Array} lineData
+ * @param {number[] | Float32Array} optionalLineData
  * @param {(x: number, y: number, z: number) => Vertex} transformer
  *
  * @returns {LineData[]}
  */
-function getLines(lineData, transformer) {
+function getLines(lineData, optionalLineData, transformer) {
   const lines = [];
   for (let i = 0; i < lineData.length; i += 2 * 4) {
     const points = [];
@@ -124,7 +137,72 @@ function getLines(lineData, transformer) {
     lines.push(line);
   }
 
+  for (let i = 0; i < optionalLineData.length; i += 4 * 4 * 2) {
+    const points = [];
+    let colorCode = 16;
+
+    for (let j = 0; j < 16; j += 4) {
+      const x = optionalLineData[i + j];
+      const y = optionalLineData[i + j + 1];
+      const z = optionalLineData[i + j + 2];
+      colorCode = optionalLineData[i + j + 3];
+
+      const point = transformer(x, y, z);
+
+      points.push(point);
+    }
+
+    const [p1, p2, c1, c2] = points;
+
+    /** @type {Vertex} */
+    const edge = [p2[0] - p1[0], p2[1] - p1[1], p2[2] - p1[2]];
+
+    /** @type {Vertex} */
+    const toC1 = [c1[0] - p1[0], c1[1] - p1[1], c1[2] - p1[2]];
+
+    /** @type {Vertex} */
+    const toC2 = [c2[0] - p1[0], c2[1] - p1[1], c2[2] - p1[2]];
+
+    /** @type {Vertex} */
+    const viewNormal = [0, 0, 1];
+
+    const cross1 = dot(cross(edge, toC1), viewNormal);
+    const cross2 = dot(cross(edge, toC2), viewNormal);
+
+    if (cross1 * cross2 > 0) {
+      lines.push({
+        p1,
+        p2,
+        colorCode,
+      });
+    }
+  }
+
   return lines;
+}
+
+/**
+ *
+ * @param {Vertex} a
+ * @param {Vertex} b
+ */
+function dot(a, b) {
+  return a[0] * b[0] + a[1] * b[1] + a[2] * b[2];
+}
+
+/**
+ *
+ * @param {Vertex} a
+ * @param {Vertex} b
+ *
+ * @returns {Vertex}
+ */
+function cross([ax, ay, az], [bx, by, bz]) {
+  const x = ay * bz - az * by;
+  const y = az * bx - ax * bz;
+  const z = ax * by - ay * bx;
+
+  return [x, y, z];
 }
 
 /**

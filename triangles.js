@@ -21,7 +21,7 @@
  * @typedef {[number, number, number, number]} Plane
  */
 
-import { topoSortWithSCC } from "./topological-sort.js";
+import { topologicalSort } from "./topological-sort.js";
 
 /**
  * @template {(Triangle | Line)} T
@@ -51,20 +51,20 @@ export function depthSortTrianglesAndLines(geometry) {
     edges.set(i, new Set());
   }
 
-  const L_INDEX = 58;
-  const T_INDEX = 8;
+  const L_INDEX = 70;
+  const T_INDEX = 17;
 
   for (let i = 0; i < out.length; i++) {
     const a = out[i];
 
-    if (i === L_INDEX) {
-      // @ts-ignore
-      a.colorCode = 2;
-    }
-    if (i === T_INDEX) {
-      // @ts-ignore
-      a.colorCode = 3;
-    }
+    // if (i === L_INDEX) {
+    //   // @ts-ignore
+    //   a.colorCode = 2;
+    // }
+    // if (i === T_INDEX) {
+    //   // @ts-ignore
+    //   a.colorCode = 3;
+    // }
 
     // console.assert(
     //   a.p1[1] !== 0.9727835860725456 || a.p2[1] !== 0.7499470291701398,
@@ -129,6 +129,7 @@ export function depthSortTrianglesAndLines(geometry) {
         const overlap = trianglesOverlap(a, b);
 
         if (!overlap) {
+          console.assert(!shouldLog, "triangles do not overlap");
           continue;
         }
 
@@ -211,7 +212,38 @@ export function depthSortTrianglesAndLines(geometry) {
     }
   }
 
-  const sorted = topoSortWithSCC(edges, out.length);
+  const sorted = topologicalSort(edges, out.length);
+
+  // console.log([...sorted]);
+
+  sorted.sort(function (aIndex, bIndex) {
+    const a = out[aIndex];
+    const b = out[bIndex];
+
+    if (a.isTriangle === b.isTriangle) {
+      return 0;
+    }
+
+    if (edges.get(aIndex)?.size === 0) {
+      return 1;
+    }
+
+    if (edges.get(bIndex)?.size === 0) {
+      return -1;
+    }
+
+    return 0;
+
+    if (edges.get(aIndex)?.has(bIndex)) {
+      return 0;
+    }
+
+    if (edges.get(bIndex)?.has(aIndex)) {
+      return 0;
+    }
+
+    return a.isTriangle ? -1 : 1;
+  });
 
   return sorted.map((i) => [out[i], i]);
 }
@@ -336,7 +368,8 @@ function lineTriangleOverlap(line, triangle, log = false) {
   }
   const side = compareSideOfPlaneToCamera(triangle.plane, line);
 
-  const intersectionsOnTriangle = coplanar2.length && coplanar2.every((b) => b);
+  const intersectionsOnTriangle =
+    coplanar2.length > 0 && coplanar2.every((b) => b);
 
   const pointsOnTriangleCoplanar =
     (p2Side === 0 && !p1Side) || (p1Side === 0 && !p2Side);
