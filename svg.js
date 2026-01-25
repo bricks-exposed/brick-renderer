@@ -57,7 +57,7 @@ function render(svg, model, transformation) {
   const triangles = getTriangles(model.geometry.triangles, transformer);
 
   const contents = depthSortTrianglesAndLines([...triangles, ...lines]).map(
-    ([g, i]) => draw(g, model.color, i)
+    (g) => draw(g, model.color)
   );
 
   svg.innerHTML = contents.join("");
@@ -66,9 +66,8 @@ function render(svg, model, transformation) {
 /**
  * @param {TriangleData | LineData} geometry
  * @param {Color} defaultColor
- * @param {number} i
  */
-function draw(geometry, defaultColor, i) {
+function draw(geometry, defaultColor) {
   const { p1, p2 } = geometry;
 
   const color =
@@ -86,16 +85,16 @@ function draw(geometry, defaultColor, i) {
       stroke="rgba(${r} ${g} ${b} / ${a})"
       stroke-width="0.01"
       stroke-linejoin="bevel"
-      data-i="${i}"
     />`;
   } else {
-    return `<line x1="${p1[0]}" y1="${p1[1]}" x2="${p2[0]}" y2="${
-      p2[1]
-    }" stroke="${
-      geometry.colorCode === 16 ? "black" : "yellow"
-    }" stroke-width="0.01" stroke-linecap="round" data-color="${
-      geometry.colorCode
-    }" data-i="${i}" />`;
+    return `
+    <line
+      x1="${p1[0]}" y1="${p1[1]}"
+      x2="${p2[0]}" y2="${p2[1]}"
+      stroke="black"
+      stroke-width="0.01"
+      stroke-linecap="round"
+    />`;
   }
 }
 

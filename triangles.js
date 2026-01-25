@@ -26,7 +26,7 @@ import { topologicalSort } from "./topological-sort.js";
 /**
  * @template {(Triangle | Line)} T
  * @param {T[]} geometry
- * @returns {[T, number][]}
+ * @returns {T[]}
  */
 export function depthSortTrianglesAndLines(geometry) {
   const out = geometry.map(function (t) {
@@ -44,73 +44,32 @@ export function depthSortTrianglesAndLines(geometry) {
         };
   });
 
-  /** @type {Map<number, Set<number>>} */
+  /** @type {Map<T, Set<T>>} */
   const edges = new Map();
 
-  for (let i = 0; i < out.length; i++) {
-    edges.set(i, new Set());
+  for (const geometry of out) {
+    edges.set(geometry, new Set());
   }
-
-  const L_INDEX = 70;
-  const T_INDEX = 17;
 
   for (let i = 0; i < out.length; i++) {
     const a = out[i];
 
-    // if (i === L_INDEX) {
-    //   // @ts-ignore
-    //   a.colorCode = 2;
-    // }
-    // if (i === T_INDEX) {
-    //   // @ts-ignore
-    //   a.colorCode = 3;
-    // }
-
-    // console.assert(
-    //   a.p1[1] !== 0.9727835860725456 || a.p2[1] !== 0.7499470291701398,
-    //   i
-    // );
-
     for (let j = i + 1; j < out.length; j++) {
       const b = out[j];
 
-      const shouldLog = // i === L_INDEX || j === L_INDEX;
-        false &&
-        i === Math.min(T_INDEX, L_INDEX) &&
-        j === Math.max(T_INDEX, L_INDEX);
-
+      // No need to sort two lines
+      // (assuming they're the same color)
       if (!a.isTriangle && !b.isTriangle) {
         continue;
       }
 
-      if (shouldLog && i === T_INDEX && j === L_INDEX) {
-        console.log(a);
-        console.log(b);
-
-        // @ts-ignore
-        // console.log(compareSideOfPlaneToCamera(a.plane, b, shouldLog));
-        // // @ts-ignore
-        // console.log(compareSideOfPlaneToCamera(b.plane, a, shouldLog));
-      }
-
-      // The two triangles definitely don't overlap
+      // The two geometries definitely don't overlap
       // as their rectangular bounding boxes don't
       // so we don't need to sort them.
-      // This is faster than checking if the triangles
+      // This is faster than checking if the geometries
       // themselves overlap.
       if (!boundsOverlap(a.boundingBox, b.boundingBox)) {
-        console.assert(!shouldLog, "Bounds do not overlap");
         continue;
-      }
-
-      function drawABehindB() {
-        console.assert(!shouldLog, "drawing a behind b", i, j);
-        edges.get(i)?.add(j);
-      }
-
-      function drawBBehindA() {
-        console.assert(!shouldLog, "drawing b behind a", i, j);
-        edges.get(j)?.add(i);
       }
 
       /**
@@ -118,9 +77,9 @@ export function depthSortTrianglesAndLines(geometry) {
        */
       function draw(direction) {
         return direction === -1
-          ? drawBBehindA()
+          ? edges.get(b)?.add(a)
           : direction === 1
-          ? drawABehindB()
+          ? edges.get(a)?.add(b)
           : false;
       }
 
@@ -129,14 +88,6 @@ export function depthSortTrianglesAndLines(geometry) {
         const overlap = trianglesOverlap(a, b);
 
         if (!overlap) {
-          console.assert(!shouldLog, "triangles do not overlap");
-          continue;
-        }
-
-        const boundingBox = boundingBoxesOverlap(a.boundingBox, b.boundingBox);
-
-        if (boundingBox) {
-          draw(boundingBox);
           continue;
         }
 
@@ -153,10 +104,9 @@ export function depthSortTrianglesAndLines(geometry) {
           draw(-1 * aSideOfB);
           continue;
         }
-
-        console.error("hmmmm, coplanar");
       } else if (a.isTriangle || b.isTriangle) {
         const line = a.isTriangle ? b : a;
+        const direction = a.isTriangle ? 1 : -1;
 
         let triangle;
         if (a.isTriangle) {
@@ -167,85 +117,34 @@ export function depthSortTrianglesAndLines(geometry) {
           throw new Error();
         }
 
-        const overlap = lineTriangleOverlap(line, triangle, shouldLog);
+        const overlap = lineTriangleOverlap(line, triangle);
 
         if (overlap === false) {
-          console.assert(!shouldLog, "they do not overlap");
           continue;
         }
 
-        const boundingBox = boundingBoxesOverlap(a.boundingBox, b.boundingBox);
+        const boundingBox = zOverlap(a.boundingBox, b.boundingBox);
 
         if (boundingBox) {
-          console.assert(!shouldLog, "bounding box", boundingBox);
           draw(boundingBox);
           continue;
         }
 
-        const direction = a.isTriangle ? 1 : -1;
-
         if (overlap) {
-          console.assert(!shouldLog, "overlap", overlap, i, j);
           draw(direction * overlap);
           continue;
         }
 
-        console.assert(!shouldLog, "coplanar");
-        // console.warn("coplanar line");
+        // If the line is coplanar with the triangle,
+        // draw it on top so edges are clear.
         draw(direction);
-      } else {
-        // Two lines don't need to be ordered
-        continue;
       }
-    }
-  }
-
-  for (const [edge, targets] of edges) {
-    if (
-      true ||
-      edge === T_INDEX ||
-      edge === L_INDEX ||
-      targets.has(T_INDEX) ||
-      targets.has(L_INDEX)
-    ) {
-      // console.log(`${edge} -> ${[...targets]}`);
     }
   }
 
   const sorted = topologicalSort(edges, out.length);
 
-  // console.log([...sorted]);
-
-  sorted.sort(function (aIndex, bIndex) {
-    const a = out[aIndex];
-    const b = out[bIndex];
-
-    if (a.isTriangle === b.isTriangle) {
-      return 0;
-    }
-
-    if (edges.get(aIndex)?.size === 0) {
-      return 1;
-    }
-
-    if (edges.get(bIndex)?.size === 0) {
-      return -1;
-    }
-
-    return 0;
-
-    if (edges.get(aIndex)?.has(bIndex)) {
-      return 0;
-    }
-
-    if (edges.get(bIndex)?.has(aIndex)) {
-      return 0;
-    }
-
-    return a.isTriangle ? -1 : 1;
-  });
-
-  return sorted.map((i) => [out[i], i]);
+  return sorted;
 }
 
 /**
@@ -279,7 +178,7 @@ function isTriangle(geometry) {
  * @param {BoundingBox} a
  * @param {BoundingBox} b
  */
-function boundingBoxesOverlap(a, b) {
+function zOverlap(a, b) {
   if (a.minZ > b.maxZ) {
     return -1;
   }
@@ -296,13 +195,10 @@ function boundingBoxesOverlap(a, b) {
  * @param {Line} line
  * @param {Triangle & { plane: Plane }} triangle
  */
-function lineTriangleOverlap(line, triangle, log = false) {
+function lineTriangleOverlap(line, triangle) {
   const p1Side =
     pointInTriangle(line.p1, triangle) &&
     pointSideOfPlane(triangle.plane, line.p1);
-  if (log) {
-    console.error({ p1Side });
-  }
   if (p1Side) {
     return p1Side;
   }
@@ -310,10 +206,6 @@ function lineTriangleOverlap(line, triangle, log = false) {
   const p2Side =
     pointInTriangle(line.p2, triangle) &&
     pointSideOfPlane(triangle.plane, line.p2);
-  if (log) {
-    console.error({ p2Side });
-  }
-
   if (p2Side) {
     return p2Side;
   }
@@ -325,10 +217,10 @@ function lineTriangleOverlap(line, triangle, log = false) {
     [triangle.p3, triangle.p1],
   ];
 
-  const coplanar2 = [];
+  let coplanarIntersection = false;
 
   for (const [e1, e2] of edges) {
-    const overlap = lineIntersectionPoint2d(line.p1, line.p2, e1, e2, log);
+    const overlap = lineIntersectionPoint2d(line.p1, line.p2, e1, e2);
 
     if (!overlap) {
       continue;
@@ -336,15 +228,8 @@ function lineTriangleOverlap(line, triangle, log = false) {
 
     const [x, y] = overlap;
 
-    const [x1, y1, z1] = line.p1;
-    const [x2, y2, z2] = line.p2;
-
-    const t = x2 - x1 === 0 ? (y - y1) / (y2 - y1) : (x - x1) / (x2 - x1);
-
-    const zOfLineAtPoint = t * (z2 - z1) + z1;
-
-    const intersectionPoint = [x, y, zOfLineAtPoint];
-
+    // Ignore intersections that are just the line ending points
+    // as those are covered by the above checks
     if (
       (x === line.p1[0] && y === line.p1[1]) ||
       x === line.p2[0] ||
@@ -353,48 +238,51 @@ function lineTriangleOverlap(line, triangle, log = false) {
       continue;
     }
 
-    if (log) {
-      console.error(overlap, x, y, zOfLineAtPoint);
-      console.error(pointSideOfPlane(triangle.plane, [x, y, zOfLineAtPoint]));
-    }
+    const intersection = pointOnLine(line, x, y);
+    const side = pointSideOfPlane(triangle.plane, intersection);
 
-    const side = pointSideOfPlane(triangle.plane, [x, y, zOfLineAtPoint]);
-
-    coplanar2.push([[x, y, zOfLineAtPoint], side === 0]);
     if (side === 0) {
+      coplanarIntersection = true;
       continue;
     }
+
+    // If an intersection point is definitively on one side of the triangle,
+    // use that and ignore the other points even if they're coplanar.
     return side;
   }
-  const side = compareSideOfPlaneToCamera(triangle.plane, line);
 
-  const intersectionsOnTriangle =
-    coplanar2.length > 0 && coplanar2.every((b) => b);
+  const side = compareSideOfPlaneToCamera(triangle.plane, line);
 
   const pointsOnTriangleCoplanar =
     (p2Side === 0 && !p1Side) || (p1Side === 0 && !p2Side);
 
   const coplanar =
-    (pointsOnTriangleCoplanar || intersectionsOnTriangle) && side === 0;
-
-  if (log) {
-    console.log({
-      coplanar,
-      pointsOnTriangleCoplanar,
-      coplanar2,
-      intersectionsOnTriangle,
-      side,
-    });
-  }
+    (pointsOnTriangleCoplanar || coplanarIntersection) && side === 0;
 
   return coplanar ? 0 : false;
 }
 
 /**
- * Check if a point is inside a triangle (2D, XY projection)
+ * @param {Line} line
+ * @param {number} x
+ * @param {number} y
+ *
+ * @returns {Vertex}
+ */
+function pointOnLine(line, x, y) {
+  const [x1, y1, z1] = line.p1;
+  const [x2, y2, z2] = line.p2;
+
+  const t = x2 - x1 === 0 ? (y - y1) / (y2 - y1) : (x - x1) / (x2 - x1);
+
+  const zOfLineAtPoint = t * (z2 - z1) + z1;
+
+  return [x, y, zOfLineAtPoint];
+}
+
+/**
  * @param {Vertex} point
  * @param {Triangle} triangle
- * @returns {boolean}
  */
 function pointInTriangle(point, { p1, p2, p3 }) {
   const d1 = crossSign(point, p1, p2);
@@ -424,13 +312,7 @@ function crossSign(p1, p2, p3) {
  * @param {Vertex} p3
  * @param {Vertex} p4
  */
-function lineIntersectionPoint2d(
-  [x1, y1],
-  [x2, y2],
-  [x3, y3],
-  [x4, y4],
-  log = false
-) {
+function lineIntersectionPoint2d([x1, y1], [x2, y2], [x3, y3], [x4, y4]) {
   const tNumerator = (x1 - x3) * (y3 - y4) - (y1 - y3) * (x3 - x4);
 
   const uNumerator = -1 * ((x1 - x2) * (y1 - y3) - (y1 - y2) * (x1 - x3));
@@ -445,18 +327,6 @@ function lineIntersectionPoint2d(
 
   const uIntersects = 0 <= u && u <= 1;
 
-  if (log) {
-    console.error({
-      tNumerator,
-      uNumerator,
-      denominator,
-      t,
-      u,
-      tIntersects,
-      uIntersects,
-    });
-  }
-
   if (tIntersects && uIntersects) {
     return [x1 + t * (x2 - x1), y1 + t * (y2 - y1)];
   }
@@ -465,33 +335,10 @@ function lineIntersectionPoint2d(
 }
 
 /**
- * Check if two line segments intersect in 2D
- * @param {Vertex} a1
- * @param {Vertex} a2
- * @param {Vertex} b1
- * @param {Vertex} b2
- */
-function segmentsIntersect(a1, a2, b1, b2) {
-  const d1 = crossSign(a1, b1, b2);
-  const d2 = crossSign(a2, b1, b2);
-  const d3 = crossSign(b1, a1, a2);
-  const d4 = crossSign(b2, a1, a2);
-
-  if (
-    ((d1 > 0 && d2 < 0) || (d1 < 0 && d2 > 0)) &&
-    ((d3 > 0 && d4 < 0) || (d3 < 0 && d4 > 0))
-  ) {
-    return true;
-  }
-
-  return false;
-}
-
-/**
  * Adapted from https://rosettacode.org/wiki/Determine_if_two_triangles_overlap
  *
- * @param {Triangle} a
- * @param {Triangle} b
+ * @param {Triangle & { boundingBox: BoundingBox }} a
+ * @param {Triangle & { boundingBox: BoundingBox }} b
  */
 function trianglesOverlap(a, b) {
   const triangles = [
@@ -518,7 +365,11 @@ function trianglesOverlap(a, b) {
     }
   }
 
-  return true;
+  // Check z overlap after the geometry overlap, as
+  // two overlapping z geometries shouldn't be sorted
+  // unless they overlap in XY. Not just for performance —
+  // it could cause a cycle in the graph.
+  return zOverlap(a.boundingBox, b.boundingBox);
 }
 
 /**
@@ -611,38 +462,6 @@ function getPlane({ p1, p2, p3 }) {
   const d = -(a * p1[0] + b * p1[1] + c * p1[2]);
 
   return [a, b, c, d];
-}
-
-/**
- * Get the point where a line crosses a plane
- * @param {Line} line
- * @param {Plane} plane
- * @returns {Vertex | null} The intersection point, or null if no intersection
- */
-function linePlaneIntersection(line, plane) {
-  const [a, b, c, d] = plane;
-  const { p1, p2 } = line;
-
-  // Direction vector of the line
-  const dx = p2[0] - p1[0];
-  const dy = p2[1] - p1[1];
-  const dz = p2[2] - p1[2];
-
-  // Check if line is parallel to plane
-  const denominator = a * dx + b * dy + c * dz;
-  if (Math.abs(denominator) < 1e-10) {
-    return null; // Line is parallel to plane
-  }
-
-  // Calculate parameter t for the intersection point
-  const t = -(a * p1[0] + b * p1[1] + c * p1[2] + d) / denominator;
-
-  // Calculate intersection point
-  const x = p1[0] + t * dx;
-  const y = p1[1] + t * dy;
-  const z = p1[2] + t * dz;
-
-  return [x, y, z];
 }
 
 /**
